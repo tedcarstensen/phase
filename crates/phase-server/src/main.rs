@@ -80,7 +80,7 @@ use server_core::spectator_wire_guard::{
     guard_draft_spectator_capacity, guard_game_spectator_capacity, guard_spectate_draft,
     guard_spectator_join,
 };
-use server_core::takeback::RewindOption;
+use server_core::takeback::RewindPublication;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -492,6 +492,10 @@ fn build_game_started_message(
         // not a choice. Populating `GameStarted` (not just `StateUpdate`) is
         // what makes a reconnect mid-game see the list immediately.
         rewind_targets: session.rewind_options(),
+        // Narrowed to this recipient by the session, for the same reason the
+        // list above is read here rather than passed in: the authoritative
+        // session is the only thing that knows which rows this seat may act on.
+        undoable_actions: session.undoable_actions(player),
     }
 }
 
@@ -513,15 +517,17 @@ fn build_game_started_messages(session: &mut GameSession) -> Vec<(PlayerId, Serv
         .collect()
 }
 
-/// `rewind_targets` is a parameter here, unlike in
+/// The rewind publication is a parameter here, unlike in
 /// `build_game_started_message`, because this builder has no `GameSession` to
-/// read it from — the caller captures `session.rewind_options()` under the same
-/// lock as the transition and threads it through.
+/// read it from — the caller captures `session.rewind_publication()` under the
+/// same lock as the transition and threads it through. One captured value
+/// carries both granularities, so the turn list and this seat's action list
+/// cannot come from different instants.
 fn build_state_update_message(
     result: &ActionResult,
     state_revision: u64,
     player: PlayerId,
-    rewind_targets: Vec<RewindOption>,
+    rewind: &RewindPublication,
 ) -> Result<ServerMessage, String> {
     let (
         raw_state,
@@ -581,7 +587,8 @@ fn build_state_update_message(
         },
         derived,
         viewer_interaction,
-        rewind_targets,
+        rewind_targets: rewind.turn_boundaries.clone(),
+        undoable_actions: rewind.for_seat(player),
     })
 }
 
@@ -618,8 +625,11 @@ fn build_spectator_game_started_message(session: &GameSession) -> Result<ServerM
         events: Vec::new(),
         // Always empty for spectators, deliberately — NOT `rewind_options()`.
         // A spectator is a read-only viewer with no rollback affordance, and
-        // the list would only advertise targets they cannot request.
+        // the list would only advertise targets they cannot request. The same
+        // holds at action granularity: a spectator anchors no rollback, so
+        // there is nothing to offer them at either granularity.
         rewind_targets: Vec::new(),
+        undoable_actions: Vec::new(),
     })
 }
 
@@ -658,9 +668,10 @@ fn build_spectator_state_update_message(
         viewer_interaction,
         // Empty for the same reason as the spectator `GameStarted` builder
         // above: a spectator has no rollback affordance. This builder also
-        // takes a raw state rather than a session, so `rewind_options()` is
-        // not even in scope here.
+        // takes a raw state rather than a session, so neither list is even in
+        // scope here.
         rewind_targets: Vec::new(),
+        undoable_actions: Vec::new(),
     })
 }
 
@@ -4800,13 +4811,14 @@ async fn draft_pack_generator_for_start(
 /// and spectator fan-out as a normal action's. Pure extraction — no behavioural
 /// delta on the shipped path.
 ///
-/// `rewind_targets` and `eliminated` are both captured under the same lock as
-/// the results themselves, and both **after** `run_ai` — neither can be
-/// recomputed here because this function holds no session. Taking either from a
+/// `rewind` and `eliminated` are both captured under the same lock as the
+/// results themselves, and both **after** `run_ai` — neither can be recomputed
+/// here because this function holds no session. Taking either from a
 /// pre-`run_ai` value would ship a list one transition stale: the AI's follow-up
-/// can cross a turn (adding a rewind boundary) or finish a player off (adding an
-/// elimination), and every `StateUpdate` in the batch would then contradict the
-/// state travelling with it.
+/// can cross a turn (adding a rewind boundary), take an action (adding a
+/// rollback point) or finish a player off (adding an elimination), and every
+/// `StateUpdate` in the batch would then contradict the state travelling with
+/// it.
 async fn broadcast_ai_results(
     connections: &SharedConnections,
     game_spectators: &SharedGameSpectators,
@@ -4814,7 +4826,7 @@ async fn broadcast_ai_results(
     player_count: u8,
     eliminated: &[PlayerId],
     ai_results: &[RevisionedActionResult],
-    rewind_targets: &[RewindOption],
+    rewind: &RewindPublication,
 ) {
     // Broadcast AI follow-up results with delays
     for (i, (ai_revision, result)) in ai_results.iter().enumerate() {
@@ -4900,7 +4912,8 @@ async fn broadcast_ai_results(
                         legal_actions_by_object: object_action_payloads(&p_by_object),
                         derived: derive_transport_views(ai_raw_state, pstate, Some(*pid)),
                         viewer_interaction: derive_viewer_interaction(ai_raw_state, pstate, *pid),
-                        rewind_targets: rewind_targets.to_vec(),
+                        rewind_targets: rewind.turn_boundaries.clone(),
+                        undoable_actions: rewind.for_seat(*pid),
                     });
                 }
             }
@@ -4959,7 +4972,7 @@ async fn broadcast_takeback_approved(
     state_revision: u64,
     snapshot: server_core::BroadcastSnapshot,
     resolved_by: Option<PlayerId>,
-    rewind_targets: Vec<RewindOption>,
+    rewind: &RewindPublication,
 ) {
     let (raw_state, legal_actions, _auto_pass, spell_costs, by_object) = snapshot;
     let filtered_states: Vec<(PlayerId, GameState)> = (0..player_count)
@@ -5020,9 +5033,10 @@ async fn broadcast_takeback_approved(
                     // `run_ai` is itself a capture site: an AI follow-up that
                     // crosses a turn adds a boundary, and a pre-`run_ai` read
                     // would ship a list already one behind the state travelling
-                    // with it. The list is a live session affordance, not a
+                    // with it. The lists are a live session affordance, not a
                     // projection of `snapshot`.
-                    rewind_targets: rewind_targets.clone(),
+                    rewind_targets: rewind.turn_boundaries.clone(),
+                    undoable_actions: rewind.for_seat(*pid),
                 });
             }
         }
@@ -5324,7 +5338,7 @@ async fn handle_full_game_submission(
                 // affordance rather than a per-snapshot projection, so the
                 // freshest value under this lock is the correct one for every
                 // message this transition produces.
-                let rewind_targets = session.rewind_options();
+                let rewind_targets = session.rewind_publication();
                 let player_count = session.player_count;
                 let game_over_winner = match &session.state.waiting_for {
                     engine::types::game_state::WaitingFor::GameOver { winner } => Some(*winner),
@@ -5487,7 +5501,8 @@ async fn handle_full_game_submission(
                                 viewer_interaction: derive_viewer_interaction(
                                     &raw_state, pstate, *pid,
                                 ),
-                                rewind_targets: rewind_targets.clone(),
+                                rewind_targets: rewind_targets.turn_boundaries.clone(),
+                                undoable_actions: rewind_targets.for_seat(*pid),
                             });
                         }
                     }
@@ -5616,7 +5631,7 @@ async fn handle_resolve_all(
                         let log_entries =
                             resolve_all_log_tail(&batch_log_entries, &ai_outcome.transitions);
                         let eliminated = session.state.eliminated_players.clone();
-                        let rewind_targets = session.rewind_options();
+                        let rewind_targets = session.rewind_publication();
                         let player_count = session.player_count;
                         let game_over_winner = match &session.state.waiting_for {
                             engine::types::game_state::WaitingFor::GameOver { winner } => {
@@ -5731,7 +5746,7 @@ async fn handle_resolve_all(
             revision,
             requester,
             eliminated.clone(),
-            rewind_targets.clone(),
+            &rewind_targets,
         ));
         let _ = tx.send(acknowledgement);
         return;
@@ -5751,7 +5766,7 @@ async fn handle_resolve_all(
                     revision,
                     requester,
                     eliminated.clone(),
-                    rewind_targets.clone(),
+                    &rewind_targets,
                 ));
                 let _ = tx.send(acknowledgement);
                 return;
@@ -5771,7 +5786,7 @@ async fn handle_resolve_all(
         revision,
         requester,
         eliminated.clone(),
-        rewind_targets.clone(),
+        &rewind_targets,
     );
     let _ = tx.send(requester_update);
 
@@ -5793,7 +5808,7 @@ async fn handle_resolve_all(
                         revision,
                         player,
                         eliminated.clone(),
-                        rewind_targets.clone(),
+                        &rewind_targets,
                     ));
                 }
             }
@@ -6398,7 +6413,7 @@ async fn handle_client_message(
                     /// `StateUpdate` fan-out to the *other* seats below. The
                     /// reconnecting socket gets its own copy inside
                     /// `game_started_msg`.
-                    rewind_targets: Vec<RewindOption>,
+                    rewind_targets: RewindPublication,
                 },
                 Err(String),
             }
@@ -6464,7 +6479,7 @@ async fn handle_client_message(
                                     build_game_started_message(session, player, None, Vec::new());
                                 let pending_takeback_msg =
                                     session.pending_takeback_message().map(Box::new);
-                                let rewind_targets = session.rewind_options();
+                                let rewind_targets = session.rewind_publication();
                                 install_full_sender_while_state_locked(
                                     connections,
                                     &game_code,
@@ -6574,7 +6589,7 @@ async fn handle_client_message(
                                 &result,
                                 state_revision,
                                 pid,
-                                rewind_targets.clone(),
+                                &rewind_targets,
                             ) {
                                 let _ = sender.send(msg);
                             }
@@ -7760,8 +7775,10 @@ async fn handle_client_message(
                         // no authoritative transition has happened and no turn
                         // boundary can exist. Empty by construction, not by
                         // omission; the first `GameStarted` publishes the real
-                        // list.
+                        // lists. Neither granularity can be non-empty before
+                        // the first authoritative transition.
                         rewind_targets: Vec::new(),
+                        undoable_actions: Vec::new(),
                     };
                     if let Ok(json) = serde_json::to_string(&msg) {
                         let _ = socket.send(Message::text(json)).await;
@@ -8086,7 +8103,7 @@ async fn handle_client_message(
                                 persist_full_session_async(game_db, session);
                                 Ok(None)
                             };
-                            let rewind_targets = session.rewind_options();
+                            let rewind_targets = session.rewind_publication();
                             terminal
                                 .map_err(SessionActionError::Operational)
                                 .map(|terminal| {
@@ -8129,7 +8146,7 @@ async fn handle_client_message(
                                 &result,
                                 revision,
                                 *player,
-                                rewind_targets.clone(),
+                                &rewind_targets,
                             ) {
                                 let _ = sender.send(update);
                             }
@@ -8196,7 +8213,7 @@ async fn handle_client_message(
                                     )
                                 })
                             });
-                            let rewind_targets = session.rewind_options();
+                            let rewind_targets = session.rewind_publication();
                             terminal_artifact(
                                 session,
                                 winner,
@@ -8233,7 +8250,7 @@ async fn handle_client_message(
                                 &result,
                                 revision,
                                 *player,
-                                rewind_targets.clone(),
+                                &rewind_targets,
                             ) {
                                 let _ = sender.send(update);
                             }
@@ -8321,7 +8338,7 @@ async fn handle_client_message(
             // describe the state as it stood before its own results.
             // `snapshot.0` is the *pre*-`run_ai` rollback state, so sourcing
             // eliminations from it would be exactly that staleness.
-            let rewind_targets = session.rewind_options();
+            let rewind_targets = session.rewind_publication();
             let eliminated = session.state.eliminated_players.clone();
             // GH #1507: persist the rolled-back state immediately, in the
             // same lock as the rollback itself — otherwise SQLite still
@@ -8380,7 +8397,7 @@ async fn handle_client_message(
                         state_revision,
                         snapshot,
                         None,
-                        rewind_targets.clone(),
+                        &rewind_targets,
                     )
                     .await;
                     broadcast_ai_results(
@@ -8445,7 +8462,7 @@ async fn handle_client_message(
             };
             // Read AFTER `run_ai` for the same reason as the `RequestTakeback`
             // arm above.
-            let rewind_targets = session.rewind_options();
+            let rewind_targets = session.rewind_publication();
             let eliminated = session.state.eliminated_players.clone();
             // GH #1507: persist the rolled-back state immediately — see the
             // matching comment in the `RequestTakeback` arm above.
@@ -8482,7 +8499,7 @@ async fn handle_client_message(
                         state_revision,
                         snapshot,
                         Some(player_id),
-                        rewind_targets.clone(),
+                        &rewind_targets,
                     )
                     .await;
                     broadcast_ai_results(
@@ -9628,7 +9645,7 @@ mod state_transport_derived_tests {
     }
 
     fn state_update_action_fields(result: &ActionResult, viewer: PlayerId) -> (usize, bool) {
-        match build_state_update_message(result, 1, viewer, Vec::new())
+        match build_state_update_message(result, 1, viewer, &RewindPublication::default())
             .expect("fixture state update")
         {
             ServerMessage::StateUpdate {
