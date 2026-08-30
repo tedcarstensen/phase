@@ -219,9 +219,10 @@ vi.mock("../../stores/gameStore", () => ({
 }));
 
 vi.mock("../../constants/storage", () => ({
-  ACTIVE_DECK_KEY: "active-deck",
   isRandomDeckSelection: () => false,
   loadActiveDeck: () => ({ main: ["Island"], sideboard: [] }),
+  // No active-deck pointer is set in these tests; the name is only a label.
+  loadActiveDeckName: () => null,
   loadSavedDeckBracket: () => null,
 }));
 
