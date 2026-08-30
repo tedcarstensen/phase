@@ -1372,8 +1372,12 @@ function GamePageContent({
   const playerZoneRailStyle: ZoneRailStyle = isMobile
     ? { "--card-w": "28px", "--card-h": "39px" }
     : { "--card-w": "clamp(45px, 4.5vw, 70px)", "--card-h": "clamp(63px, 6.3vw, 98px)" };
+  // 44px wide on mobile, not 38: each pile is a button (open the zone viewer),
+  // so it owes the same 44×44 floor as every other touch control. The height
+  // follows from the card aspect ratio the desktop clamp already encodes
+  // (63/45), which keeps the pile art undistorted.
   const pileSize = isMobile
-    ? { width: "38px", height: "53px" }
+    ? { width: "44px", height: "62px" }
     : { width: "clamp(45px, 4.5vw, 70px)", height: "clamp(63px, 6.3vw, 98px)" };
   const handleViewZone = useCallback(
     (

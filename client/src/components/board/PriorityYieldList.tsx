@@ -33,7 +33,7 @@ export function PriorityYieldList() {
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={toggle}
-          className={`pointer-events-auto flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ring-1 transition-colors ${
+          className={`touch-target pointer-events-auto flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ring-1 transition-colors ${
             open
               ? "bg-amber-400 text-black ring-amber-300"
               : "bg-amber-500/90 text-black ring-amber-300/80 hover:bg-amber-400"

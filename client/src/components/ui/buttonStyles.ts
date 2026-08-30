@@ -16,8 +16,14 @@ interface GameButtonOptions {
   className?: string;
 }
 
+// `touch-target` (index.css) raises the 36px `min-h-9` desktop box to the 44×44
+// floor on coarse pointers only, which is what `menuButtonClass`'s sm/md/lg
+// already do unconditionally via `min-h-11`. Keeping the mouse box at 36px
+// preserves the in-game density the desktop layout is tuned for; a caller that
+// must stay smaller on touch too overrides with Tailwind's `!` prefix (see the
+// max-height:500px landscape compaction in ActionButton).
 const BASE_CLASSES =
-  "min-h-9 border border-solid font-semibold transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 inline-flex items-center justify-center shadow-[0_1px_0_rgba(255,255,255,0.06)]";
+  "min-h-9 touch-target border border-solid font-semibold transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 inline-flex items-center justify-center shadow-[0_1px_0_rgba(255,255,255,0.06)]";
 
 const SIZE_CLASSES: Record<GameButtonSize, string> = {
   xs: "px-2.5 py-1 text-xs rounded-[7px]",

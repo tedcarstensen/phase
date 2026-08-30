@@ -258,7 +258,11 @@ export function BattlefieldRow({
       {rowType === "creatures" && expandedGroupIds.size > 0 && (
         <button
           type="button"
-          className="absolute right-1 top-1 z-50 flex h-7 w-7 items-center justify-center rounded-full bg-black/85 text-white ring-1 ring-white/70 shadow-[0_2px_8px_rgba(0,0,0,0.7)] transition-transform hover:scale-105 hover:bg-slate-800"
+          // `touch-target-halo`, not `touch-target`: this pill floats over the
+          // creature row, so growing its painted box to 44px would cover the
+          // cards beneath it. The halo is safe here because the button has no
+          // sibling control within 44px — it is alone in the row's corner.
+          className="touch-target-halo absolute right-1 top-1 z-50 flex h-7 w-7 items-center justify-center rounded-full bg-black/85 text-white ring-1 ring-white/70 shadow-[0_2px_8px_rgba(0,0,0,0.7)] transition-transform hover:scale-105 hover:bg-slate-800"
           onClick={() => setExpandedGroupIds(new Set())}
           aria-label={t("board.regroupCreatures")}
           title={t("board.regroupCreatures")}

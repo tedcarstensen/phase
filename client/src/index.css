@@ -238,6 +238,62 @@ html.game-viewport-lock #root {
   user-drag: none;
 }
 
+/* ============================================================================
+   Touch targets — the 44×44 CSS-px floor (Apple HIG 44pt / Material 48dp).
+
+   Two composable primitives, because in-game chrome has two distinct classes of
+   control and one rule cannot serve both:
+
+     .touch-target       grows the control's OWN box to the floor. Use it wherever
+                         the layout has room to give — action buttons, the mobile
+                         rail chips, zone piles, list rows.
+     .touch-target-halo  leaves the painted box at its designed size and expands
+                         only the HIT region, via a centred pseudo-element. Use it
+                         for a control that floats over content it must not cover
+                         (the creature row's regroup pill). NOT for controls that
+                         sit closer together than 44px: the halos overlap, and a
+                         positioned control's halo paints over — and therefore
+                         swallows the taps of — an unpositioned neighbour. That is
+                         why `board/ManualManaToggle` keeps its own tighter inset
+                         instead of this class: `UndoButton` sits 4px below it.
+
+                         `max(100%, 44px)` is deliberate. A percentage on an
+                         absolutely positioned box resolves against its ancestor's
+                         PADDING box, so a derived expression (`-inset-N`) silently
+                         loses the ancestor's border width — the 42px-not-44px trap
+                         documented in `mana/AmountInput`. The 44px branch is
+                         absolute, so the floor is exact whatever the border is.
+
+   Both are gated on `(pointer: coarse)`, the same capability gate the
+   number-input steppers above use, so mouse-driven density is untouched. They
+   are plain (unlayered) rules rather than `@utility`, which is what makes them a
+   FLOOR: unlayered declarations outrank Tailwind's layered utilities, so a
+   `h-6`/`min-h-*` elsewhere on the element cannot shrink the target back below
+   it. A caller that genuinely must go smaller still can, via `!important`
+   (Tailwind's `!` prefix) — which is how the max-height:500px landscape
+   compaction in ActionButton keeps its tighter sizing.
+   ========================================================================== */
+@media (pointer: coarse) {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .touch-target-halo {
+    position: relative;
+  }
+
+  .touch-target-halo::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
+
 /* Allow text selection in inputs/textareas even within the game */
 .game-no-select input,
 .game-no-select textarea,

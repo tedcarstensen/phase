@@ -35,7 +35,7 @@ export function MayTriggerAutoChoiceList() {
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={toggle}
-          className={`pointer-events-auto flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ring-1 transition-colors ${
+          className={`touch-target pointer-events-auto flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ring-1 transition-colors ${
             open
               ? "bg-sky-400 text-black ring-sky-300"
               : "bg-sky-500/90 text-black ring-sky-300/80 hover:bg-sky-400"

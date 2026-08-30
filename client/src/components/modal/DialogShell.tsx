@@ -289,7 +289,7 @@ function CloseButton({ onClose }: { onClose: () => void }) {
       onClick={onClose}
       aria-label={t("dialogShell.close")}
       title={t("dialogShell.closeTitle")}
-      className="absolute right-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 lg:right-3 lg:top-3"
+      className="touch-target absolute right-2 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 lg:right-3 lg:top-3"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
