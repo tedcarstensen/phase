@@ -94,7 +94,16 @@ export function CardImage({
   const resolvedOracleText = oracleText ?? fallbackData?.oracle_text ?? undefined;
 
   const tappedStyle = tapped ? "rotate-[90deg] origin-center" : "";
-  const baseClasses = `w-[var(--card-w)] h-[var(--card-h)] rounded-lg transition-transform duration-200 ${tappedStyle} ${className}`;
+  // `card-face` is the stable hook surfaces use to size the rendered card —
+  // notably the `.card-choice-strip` / `.zone-viewer-strip` rules in index.css.
+  // It rides `baseClasses` so it lands on EVERY branch below (loading pulse,
+  // card back, art fallback, real <img>) without prop plumbing. Those strip
+  // rules used to select `[role="img"]`, which was true of the card element only
+  // while it was a background-image div; swapping it for a real `<img>` silently
+  // dropped the strip sizing for every card whose art resolved, and a later
+  // "enlarge modal cards" pass raised a number that no longer reached anything.
+  // A class the component itself owns cannot come apart that way again.
+  const baseClasses = `card-face w-[var(--card-w)] h-[var(--card-h)] rounded-lg transition-transform duration-200 ${tappedStyle} ${className}`;
 
   const borderStyle = colors
     ? getBevelBorderStyle(colors)

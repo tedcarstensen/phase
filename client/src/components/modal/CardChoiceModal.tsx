@@ -1861,7 +1861,7 @@ function RemoveCounterDistributionCostModal({
                       )}
                       <button
                         type="button"
-                        className="h-7 w-7 rounded-full bg-gray-700 text-sm font-bold text-white disabled:opacity-40"
+                        className="touch-target h-7 w-7 rounded-full bg-gray-700 text-sm font-bold text-white disabled:opacity-40"
                         onClick={() =>
                           setAmount(id, counterType, amount - 1, maxAmount)
                         }
@@ -1874,7 +1874,7 @@ function RemoveCounterDistributionCostModal({
                       </span>
                       <button
                         type="button"
-                        className="h-7 w-7 rounded-full bg-gray-700 text-sm font-bold text-white disabled:opacity-40"
+                        className="touch-target h-7 w-7 rounded-full bg-gray-700 text-sm font-bold text-white disabled:opacity-40"
                         onClick={() =>
                           setAmount(id, counterType, amount + 1, maxAmount)
                         }

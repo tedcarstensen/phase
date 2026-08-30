@@ -2566,8 +2566,8 @@ function MulliganDecisionPrompt({
         className="modal-card-area flex min-h-0 flex-1 items-center justify-center"
         style={
           {
-            "--card-w": "clamp(140px, 18vw, 257px)",
-            "--card-h": "clamp(196px, 25.2vw, 360px)",
+            "--card-w": "var(--hand-view-card-w)",
+            "--card-h": "var(--hand-view-card-h)",
           } as React.CSSProperties
         }
       >
@@ -2596,7 +2596,7 @@ function MulliganDecisionPrompt({
                 <CardImage
                   cardName={obj.name}
                   size="normal"
-                  className="h-[clamp(200px,40vh,360px)] w-[clamp(143px,28.6vh,257px)]"
+                  className="h-[var(--hand-view-card-h)] w-[var(--hand-view-card-w)]"
                 />
               </motion.div>
             ))}
@@ -2659,8 +2659,8 @@ function CompanionRevealPrompt({
         className="modal-card-area flex min-h-0 flex-1 items-center justify-center"
         style={
           {
-            "--card-w": "clamp(140px, 18vw, 257px)",
-            "--card-h": "clamp(196px, 25.2vw, 360px)",
+            "--card-w": "var(--hand-view-card-w)",
+            "--card-h": "var(--hand-view-card-h)",
           } as React.CSSProperties
         }
       >
@@ -2689,7 +2689,7 @@ function CompanionRevealPrompt({
                 <CardImage
                   cardName={choice.name}
                   size="normal"
-                  className="h-[clamp(200px,40vh,360px)] w-[clamp(143px,28.6vh,257px)]"
+                  className="h-[var(--hand-view-card-h)] w-[var(--hand-view-card-w)]"
                 />
               </motion.div>
             ))}
@@ -2785,8 +2785,8 @@ function MulliganBottomCardsPrompt({
         className="modal-card-area flex min-h-0 flex-1 items-center justify-center"
         style={
           {
-            "--card-w": "clamp(140px, 18vw, 257px)",
-            "--card-h": "clamp(196px, 25.2vw, 360px)",
+            "--card-w": "var(--hand-view-card-w)",
+            "--card-h": "var(--hand-view-card-h)",
           } as React.CSSProperties
         }
       >
@@ -2819,7 +2819,7 @@ function MulliganBottomCardsPrompt({
                   <CardImage
                     cardName={obj.name}
                     size="normal"
-                    className="h-[clamp(200px,40vh,360px)] w-[clamp(143px,28.6vh,257px)]"
+                    className="h-[var(--hand-view-card-h)] w-[var(--hand-view-card-w)]"
                   />
                 </motion.button>
               );
