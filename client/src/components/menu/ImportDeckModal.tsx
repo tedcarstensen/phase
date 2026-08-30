@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 
 import { menuButtonClass } from "./buttonStyles";
-import { STORAGE_KEY_PREFIX, listSavedDeckNames, stampDeckMeta } from "../../constants/storage";
+import { listSavedDeckNames, saveSavedDeckRaw, stampDeckMeta } from "../../constants/storage";
 import {
   assignOathbreakerSlots,
   deriveImportedDeckName,
@@ -108,10 +108,7 @@ export function ImportDeckModal({ open, onClose, onImported }: ImportDeckModalPr
   };
 
   const persistImport = (name: string, deck: ParsedDeck, format?: "Oathbreaker") => {
-    localStorage.setItem(
-      STORAGE_KEY_PREFIX + name,
-      JSON.stringify(format ? { ...deck, format } : deck),
-    );
+    saveSavedDeckRaw(name, JSON.stringify(format ? { ...deck, format } : deck));
     stampDeckMeta(name);
     finishImport(name);
   };

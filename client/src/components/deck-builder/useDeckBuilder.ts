@@ -8,12 +8,17 @@ import type { ParsedDeck, DeckEntry } from "../../services/deckParser";
 import { deduplicateEntries, expandParsedDeck, resolveCommander } from "../../services/deckParser";
 import { evaluateDeckCompatibility, type DeckCompatibilityResult } from "../../services/deckCompatibility";
 import {
-  ACTIVE_DECK_KEY,
-  STORAGE_KEY_PREFIX,
   getDeckMeta,
+  hasSavedDeck,
+  listSavedDeckNames,
+  loadActiveDeckName,
   loadSavedDeck,
   loadSavedDeckBracket,
+  loadSavedDeckRaw,
   migrateDeckMeta,
+  removeSavedDeckRaw,
+  saveActiveDeckName,
+  saveSavedDeckRaw,
   setDeckFolder,
   stampDeckMeta,
 } from "../../constants/storage";
@@ -41,17 +46,6 @@ import {
 
 const PRECON_PREFIX = "[Pre-built] ";
 
-function listSavedDecks(): string[] {
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith(STORAGE_KEY_PREFIX)) {
-      keys.push(key.slice(STORAGE_KEY_PREFIX.length));
-    }
-  }
-  return keys.sort();
-}
-
 interface UseDeckBuilderParams {
   format: GameFormat;
   onFormatChange: (format: GameFormat) => void;
@@ -71,7 +65,7 @@ export function useDeckBuilder({
   const [searchResults, setSearchResults] = useState<ScryfallCard[]>([]);
   const [deckName, setDeckName] = useState("");
   const [bracket, setBracket] = useState<CommanderBracket | null>(null);
-  const [savedDecks, setSavedDecks] = useState(listSavedDecks);
+  const [savedDecks, setSavedDecks] = useState(listSavedDeckNames);
   const [savedDeckName, setSavedDeckName] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [commanders, setCommanders] = useState<string[]>([]);
@@ -510,9 +504,9 @@ export function useDeckBuilder({
     if (
       savedDeckName
       && savedDeckName !== nextName
-      && localStorage.getItem(STORAGE_KEY_PREFIX + savedDeckName) !== null
+      && hasSavedDeck(savedDeckName)
     ) {
-      localStorage.removeItem(STORAGE_KEY_PREFIX + savedDeckName);
+      removeSavedDeckRaw(savedDeckName);
       // Carry folder/star membership + timestamps to the new name; the
       // trailing stampDeckMeta(nextName) then no-ops since the entry exists.
       // If nextName already names another deck, the setItem below overwrites
@@ -520,14 +514,12 @@ export function useDeckBuilder({
       // replaces its metadata — both correctly reflect the surviving deck's
       // identity now living under nextName.
       migrateDeckMeta(savedDeckName, nextName);
-      if (localStorage.getItem(ACTIVE_DECK_KEY) === savedDeckName) {
-        localStorage.setItem(ACTIVE_DECK_KEY, nextName);
-      }
+      if (loadActiveDeckName() === savedDeckName) saveActiveDeckName(nextName);
     }
-    localStorage.setItem(STORAGE_KEY_PREFIX + nextName, data);
+    saveSavedDeckRaw(nextName, data);
     stampDeckMeta(nextName);
     setSavedDeckName(nextName);
-    setSavedDecks(listSavedDecks());
+    setSavedDecks(listSavedDeckNames());
     setJustSaved(true);
     setDirty(false);
     showNotification({
@@ -553,7 +545,7 @@ export function useDeckBuilder({
     const base = deckName.trim() || "Untitled Deck";
     let cloneName = `${base} copy`;
     let suffix = 2;
-    while (localStorage.getItem(STORAGE_KEY_PREFIX + cloneName) !== null) {
+    while (hasSavedDeck(cloneName)) {
       cloneName = `${base} copy ${suffix++}`;
     }
     const payload: Record<string, unknown> = {
@@ -561,7 +553,7 @@ export function useDeckBuilder({
       format,
     };
     if (bracket !== null) payload.bracket = bracket;
-    localStorage.setItem(STORAGE_KEY_PREFIX + cloneName, JSON.stringify(payload));
+    saveSavedDeckRaw(cloneName, JSON.stringify(payload));
     stampDeckMeta(cloneName);
     // A clone lands beside its source: inherit the folder, but start unstarred
     // (the star is a deliberate per-deck pin, not a copyable property).
@@ -571,7 +563,7 @@ export function useDeckBuilder({
     if (sourceFolderId) setDeckFolder(cloneName, sourceFolderId);
     setDeckName(cloneName);
     setSavedDeckName(cloneName);
-    setSavedDecks(listSavedDecks());
+    setSavedDecks(listSavedDeckNames());
     setJustSaved(true);
     setDirty(false);
     showNotification({
@@ -588,7 +580,7 @@ export function useDeckBuilder({
 
   const handleLoad = useCallback(async (name: string) => {
     const parsed = loadSavedDeck(name);
-    const data = localStorage.getItem(STORAGE_KEY_PREFIX + name);
+    const data = loadSavedDeckRaw(name);
     if (!parsed || !data) {
       if (!name.startsWith(PRECON_PREFIX)) return;
       const decks = await loadPreconDeckMap();

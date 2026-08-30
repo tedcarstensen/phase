@@ -1,4 +1,4 @@
-import { STORAGE_KEY_PREFIX } from "../constants/storage";
+import { hasSavedDeck, saveSavedDeckRaw } from "../constants/storage";
 import type { DeckEntry } from "../hooks/useDecks";
 import type { ParsedDeck } from "./deckParser";
 
@@ -14,7 +14,7 @@ export function preconDeckEntryToParsedDeck(deck: DeckEntry): ParsedDeck {
 }
 
 export function preconExists(savedName: string): boolean {
-  return localStorage.getItem(STORAGE_KEY_PREFIX + savedName) !== null;
+  return hasSavedDeck(savedName);
 }
 
 /**
@@ -24,5 +24,5 @@ export function preconExists(savedName: string): boolean {
  */
 export function savePreconDeck(savedName: string, deck: DeckEntry): void {
   const parsed = preconDeckEntryToParsedDeck(deck);
-  localStorage.setItem(STORAGE_KEY_PREFIX + savedName, JSON.stringify(parsed));
+  saveSavedDeckRaw(savedName, JSON.stringify(parsed));
 }

@@ -95,6 +95,15 @@ describe("localStorage → IndexedDB migration", () => {
     expect(result.migration.unverified).toEqual([DECK_B]);
     expect(localStorage.getItem(DECK_A)).toBeNull();
     expect(localStorage.getItem(DECK_B)).toBe('{"name":"b"}');
+    // No completion marker: the next boot re-scans localStorage wholesale.
+    expect(await get("__phase_profile_meta__", profileStore())).toBeUndefined();
+
+    _resetProfileStorageForTests();
+    const retry = await hydrateProfileStorage();
+
+    expect(retry.migration.imported).toBe(1);
+    expect(profileStorage.getItem(DECK_B)).toBe('{"name":"b"}');
+    expect(localStorage.getItem(DECK_B)).toBeNull();
   });
 
   it("does not delete anything when the migration write throws", async () => {

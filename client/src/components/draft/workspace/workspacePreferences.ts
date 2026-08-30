@@ -1,4 +1,5 @@
 import { DRAFT_WORKSPACE_PREFERENCES_KEY } from "../../../constants/storage";
+import { profileStorage } from "../../../services/profileStorage";
 import type { CardPreviewMode } from "../../../stores/preferencesStore";
 import { DRAFT_WORKSPACE_COLUMN_MAX } from "./types";
 
@@ -247,7 +248,7 @@ export function repairDraftWorkspacePreferences(value: unknown): DraftWorkspaceP
 
 export function loadDraftWorkspacePreferences(): DraftWorkspacePreferences {
   try {
-    const raw = localStorage.getItem(DRAFT_WORKSPACE_PREFERENCES_KEY);
+    const raw = profileStorage.getItem(DRAFT_WORKSPACE_PREFERENCES_KEY);
     return raw === null
       ? createDefaultDraftWorkspacePreferences()
       : repairDraftWorkspacePreferences(JSON.parse(raw));
@@ -260,7 +261,7 @@ export function saveDraftWorkspacePreferences(
   value: DraftWorkspacePreferences,
 ): "saved" | "storage-unavailable" {
   try {
-    localStorage.setItem(
+    profileStorage.setItem(
       DRAFT_WORKSPACE_PREFERENCES_KEY,
       JSON.stringify(repairDraftWorkspacePreferences(value)),
     );

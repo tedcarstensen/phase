@@ -180,7 +180,10 @@ export function hydrateProfileStorage(): Promise<ProfileHydrationResult> {
         if (!migration.unverified.includes(key)) mirror.set(key, value);
       }
 
-      if (meta === undefined) {
+      // Only claim the initial scan is done when every legacy entry made it.
+      // Leaving the marker unwritten keeps localStorage the wholesale authority
+      // for one more boot, which is the conservative side of the ambiguity.
+      if (meta === undefined && migration.unverified.length === 0) {
         await set(
           MIGRATION_META_KEY,
           {

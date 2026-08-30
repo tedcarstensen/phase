@@ -23,7 +23,7 @@ import {
 import { audioManager } from "../audio/AudioManager";
 import type { DeckData, NativeAiSeat, WsAdapterEvent } from "../adapter/ws-adapter";
 import {
-  ACTIVE_DECK_KEY,
+  loadActiveDeckName,
   isRandomDeckSelection,
   loadActiveDeck,
   loadSavedDeckBracket,
@@ -192,13 +192,13 @@ function parsedDeckToDeckData(deck: ParsedDeck): DeckData {
 }
 
 /**
- * Read the declared bracket for the currently active deck from localStorage.
+ * Read the declared bracket for the currently active deck.
  * Returns `null` when no deck is selected or the deck carries no bracket tag.
  * This is the sole call site for bracket → active-deck bridging so future
  * bracket storage changes only need to update this function.
  */
 function loadActiveDeckBracket(): CommanderBracket | null {
-  const name = localStorage.getItem(ACTIVE_DECK_KEY);
+  const name = loadActiveDeckName();
   if (!name || isRandomDeckSelection(name)) return null;
   return loadSavedDeckBracket(name);
 }
@@ -1388,7 +1388,7 @@ export function GameProvider({
               });
           onResumeResetRef.current?.(reason);
           clearGame(gameId);
-          const activeDeckName = localStorage.getItem(ACTIVE_DECK_KEY);
+          const activeDeckName = loadActiveDeckName();
           const randomPlayerDeck = isRandomDeckSelection(activeDeckName);
           const parsedDeck = randomPlayerDeck ? null : loadActiveDeck();
           const suppliesDeck = formatConfig ? formatSuppliesDeck(formatConfig.format) : false;
@@ -1520,7 +1520,7 @@ export function GameProvider({
         }
       }
 
-      const activeDeckName = localStorage.getItem(ACTIVE_DECK_KEY);
+      const activeDeckName = loadActiveDeckName();
       const randomPlayerDeck = isRandomDeckSelection(activeDeckName);
       const parsedDeck = randomPlayerDeck ? null : loadActiveDeck();
       const suppliesDeck = formatConfig ? formatSuppliesDeck(formatConfig.format) : false;
@@ -1607,7 +1607,7 @@ export function GameProvider({
           if (cancelled) return;
 
           if (!nativeResume) {
-            const activeDeckName = localStorage.getItem(ACTIVE_DECK_KEY);
+            const activeDeckName = loadActiveDeckName();
             const randomPlayerDeck = isRandomDeckSelection(activeDeckName);
             const parsedDeck = randomPlayerDeck ? null : loadActiveDeck();
             const suppliesDeck = formatConfig ? formatSuppliesDeck(formatConfig.format) : false;

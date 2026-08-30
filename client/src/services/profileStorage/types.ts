@@ -43,7 +43,9 @@ export interface ProfileStorage {
    * Observe profile mutations. This is the single chokepoint that replaces
    * patching `Storage.prototype`: every write to the user's profile goes
    * through `setItem`/`removeItem` here, including writes replicated from
-   * another tab. Returns an unsubscribe function.
+   * another tab. Only actual changes are reported — rewriting a key with its
+   * current value is silent, so an idempotent save never marks the profile
+   * dirty for cloud sync. Returns an unsubscribe function.
    */
   subscribe(listener: (change: ProfileChange) => void): () => void;
   /**

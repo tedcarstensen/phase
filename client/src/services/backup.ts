@@ -394,6 +394,11 @@ export function applyBackup(
 /**
  * Parse a user-supplied file and apply it. Throws with a user-friendly
  * message on malformed input; the caller shows the message to the user.
+ *
+ * Resolves only once the restored profile is durable. The caller reloads the
+ * page to re-hydrate every store, and a reload does not wait for the profile
+ * store's write-through queue — so a restore that returned early could be
+ * reloaded out of existence.
  */
 export async function importBackupFromFile(
   file: File,
@@ -411,5 +416,7 @@ export async function importBackupFromFile(
       "File is not a phase backup, or its version is not supported.",
     );
   }
-  return applyBackup(parsed, mode);
+  const result = applyBackup(parsed, mode);
+  await profileStorage.flush();
+  return result;
 }

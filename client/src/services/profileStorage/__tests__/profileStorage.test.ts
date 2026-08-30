@@ -146,4 +146,25 @@ describe("profileStorage change notifications", () => {
 
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it("applies the same no-op rule on the localStorage fallback", async () => {
+    const original = globalThis.indexedDB;
+    // @ts-expect-error deliberately removing the global for the fallback path
+    delete globalThis.indexedDB;
+    try {
+      await hydrateProfileStorage();
+      profileStorage.setItem(DECK_A, "{}");
+      const listener = vi.fn();
+      profileStorage.subscribe(listener);
+
+      profileStorage.setItem(DECK_A, "{}");
+      profileStorage.removeItem(DECK_B);
+      expect(listener).not.toHaveBeenCalled();
+
+      profileStorage.setItem(DECK_A, '{"changed":true}');
+      expect(listener).toHaveBeenCalledWith({ key: DECK_A, origin: "local" });
+    } finally {
+      globalThis.indexedDB = original;
+    }
+  });
 });

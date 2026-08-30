@@ -29,8 +29,8 @@ const AUTO_SYNC_DEBOUNCE_MS = 3000;
 
 /**
  * Broadcast when the local profile has been replaced wholesale by a remote
- * snapshot. Components reading non-Zustand localStorage data directly (deck
- * lists, feed subscriptions, metadata) subscribe to this event and re-read.
+ * snapshot. Components reading non-Zustand profile data directly (deck lists,
+ * feed subscriptions, metadata) subscribe to this event and re-read.
  * Zustand-persisted stores rehydrate via their own `persist.rehydrate()` API.
  */
 export const PROFILE_REPLACED_EVENT = "phase:profile-replaced";
@@ -493,10 +493,10 @@ export const useCloudSyncStore = create<CloudSyncState>()(
  *
  * No page reload: a reload destroys in-progress UI state (modals, navigation,
  * multiplayer DataChannels) and used to drive a two-tab ping-pong loop with
- * CDC. Instead we (a) write the snapshot to localStorage with the watcher
+ * CDC. Instead we (a) write the snapshot to the profile store with the watcher
  * suppressed, (b) rehydrate every Zustand store whose persisted slice lives
  * in the backup envelope, and (c) broadcast `PROFILE_REPLACED_EVENT` so the
- * remaining direct-localStorage readers (deck list, feed metadata) re-fetch.
+ * remaining direct profile readers (deck list, feed metadata) re-fetch.
  */
 function applyRemote(
   set: (partial: Partial<CloudSyncState>) => void,

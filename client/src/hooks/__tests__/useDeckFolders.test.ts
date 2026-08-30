@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { groupSavedDecks, useDeckFolders } from "../useDeckFolders";
 import { DECK_FOLDERS_KEY, type DeckFolder, type DeckMeta } from "../../constants/storage";
+import { profileStorage } from "../../services/profileStorage";
 import { PROFILE_REPLACED_EVENT } from "../../stores/cloudSyncStore";
 
 beforeEach(() => {
@@ -130,17 +131,18 @@ describe("useDeckFolders (reactive)", () => {
     expect(afterStar.folders.find((f) => f.folder.id === folderId)?.decks).toEqual([]);
   });
 
-  it("refreshes folder state on a cross-tab storage event", () => {
+  it("refreshes folder state on a cross-tab profile change", () => {
     const { result } = renderHook(() => useDeckFolders());
     expect(result.current.folders).toHaveLength(0);
 
-    // Simulate another tab writing the registry, then the native storage event.
+    // Another tab's write reaches this one through the profile store, which
+    // replicates it into the mirror and notifies subscribers — the successor
+    // to the native `storage` event, which IndexedDB does not emit.
     act(() => {
-      localStorage.setItem(
+      profileStorage.setItem(
         DECK_FOLDERS_KEY,
         JSON.stringify([{ id: "x", name: "External", order: 0 }]),
       );
-      window.dispatchEvent(new Event("storage"));
     });
 
     expect(result.current.folders.map((f) => f.name)).toEqual(["External"]);

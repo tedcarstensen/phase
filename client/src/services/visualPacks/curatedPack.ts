@@ -5,7 +5,7 @@ import type { ScryfallAssetDescriptor } from "./browser/descriptors.ts";
 import { packId } from "./types.ts";
 import type { CatalogRoot } from "./types.ts";
 import { loadPrintingsData, loadScryfallData, resolveOracleIdSync } from "../scryfall.ts";
-import { listSavedDeckNames, loadSavedDeck, STORAGE_KEY_PREFIX } from "../../constants/storage.ts";
+import { listSavedDeckNames, loadSavedDeck, loadSavedDeckRaw } from "../../constants/storage.ts";
 import {
   usePreferencesStore,
   type ArtChainEntry,
@@ -83,7 +83,7 @@ let cachedPlan: CuratedPlan | null = null;
  * spurious miss into a stale hit.
  */
 function savedDeckText(): string {
-  return JSON.stringify(listSavedDeckNames().map((name) => localStorage.getItem(STORAGE_KEY_PREFIX + name)));
+  return JSON.stringify(listSavedDeckNames().map(loadSavedDeckRaw));
 }
 
 /**

@@ -3,13 +3,14 @@ import { repairParsedDeck, type ParsedDeck } from "./deckParser";
 import { normalizeCardName } from "./scryfall";
 import { FEED_REGISTRY } from "../data/feedRegistry";
 import {
-  ACTIVE_DECK_KEY,
-  STORAGE_KEY_PREFIX,
+  deleteDeck,
+  hasSavedDeck,
   loadDeckOrigins,
   loadFeedSubscriptions,
-  removeDeckMeta,
+  loadSavedDeckRaw,
   saveDeckOrigins,
   saveFeedSubscriptions,
+  saveSavedDeckRaw,
   stampDeckMeta,
 } from "../constants/storage";
 import {
@@ -135,21 +136,20 @@ function syncFeedDecksToStorage(feed: Feed): void {
 
   // Add/update decks from the feed
   for (const deck of feed.decks) {
-    const key = STORAGE_KEY_PREFIX + deck.name;
     const existingOrigin = origins[deck.name];
 
     if (existingOrigin === feed.id) {
       // Origin matches this feed — overwrite (feed is authoritative)
-      localStorage.setItem(key, JSON.stringify(feedDeckToParsedDeck(deck)));
+      saveSavedDeckRaw(deck.name, JSON.stringify(feedDeckToParsedDeck(deck)));
     } else if (existingOrigin) {
       // Origin is a different feed — skip
       continue;
-    } else if (localStorage.getItem(key)) {
+    } else if (hasSavedDeck(deck.name)) {
       // User deck with same name — skip
       continue;
     } else {
       // New deck — write it
-      localStorage.setItem(key, JSON.stringify(feedDeckToParsedDeck(deck)));
+      saveSavedDeckRaw(deck.name, JSON.stringify(feedDeckToParsedDeck(deck)));
       stampDeckMeta(deck.name, 0);
     }
 
@@ -160,14 +160,9 @@ function syncFeedDecksToStorage(feed: Feed): void {
   const feedDeckNames = new Set(feed.decks.map((d) => d.name));
   for (const [deckName, feedId] of Object.entries(origins)) {
     if (feedId === feed.id && !feedDeckNames.has(deckName)) {
-      localStorage.removeItem(STORAGE_KEY_PREFIX + deckName);
-      removeDeckMeta(deckName);
+      // Clears the payload, its metadata, and the active-deck pointer.
+      deleteDeck(deckName);
       delete origins[deckName];
-
-      // Clear active deck if it was removed
-      if (localStorage.getItem(ACTIVE_DECK_KEY) === deckName) {
-        localStorage.removeItem(ACTIVE_DECK_KEY);
-      }
     }
   }
 
@@ -288,13 +283,8 @@ export function unsubscribe(feedId: string): void {
   // Remove all decks belonging to this feed
   for (const [deckName, originFeedId] of Object.entries(origins)) {
     if (originFeedId === feedId) {
-      localStorage.removeItem(STORAGE_KEY_PREFIX + deckName);
-      removeDeckMeta(deckName);
+      deleteDeck(deckName);
       delete origins[deckName];
-
-      if (localStorage.getItem(ACTIVE_DECK_KEY) === deckName) {
-        localStorage.removeItem(ACTIVE_DECK_KEY);
-      }
     }
   }
 
@@ -359,9 +349,9 @@ export function adoptFeedDeck(deckName: string, newName?: string): string {
 
   if (newName && newName !== deckName) {
     // Copy deck data to new name
-    const raw = localStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+    const raw = loadSavedDeckRaw(deckName);
     if (raw) {
-      localStorage.setItem(STORAGE_KEY_PREFIX + targetName, raw);
+      saveSavedDeckRaw(targetName, raw);
       stampDeckMeta(targetName);
     }
   }

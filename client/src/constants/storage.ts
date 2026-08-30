@@ -202,11 +202,9 @@ export function removeDeckMeta(deckName: string): void {
 
 /** Delete a saved deck, clearing metadata and active-deck if needed. */
 export function deleteDeck(deckName: string): void {
-  profileStorage.removeItem(STORAGE_KEY_PREFIX + deckName);
+  removeSavedDeckRaw(deckName);
   removeDeckMeta(deckName);
-  if (profileStorage.getItem(ACTIVE_DECK_KEY) === deckName) {
-    profileStorage.removeItem(ACTIVE_DECK_KEY);
-  }
+  if (loadActiveDeckName() === deckName) saveActiveDeckName(null);
 }
 
 /** List all saved deck names, sorted alphabetically. */
@@ -287,6 +285,37 @@ export function deleteFolder(id: string): void {
   saveFolderStore(folders.filter((f) => f.id !== id));
 }
 
+// --- Saved deck helpers ---
+
+/**
+ * Raw persisted JSON for a saved deck, or null when no deck is saved under
+ * that name. The typed readers below and every caller that needs the exact
+ * on-disk bytes (feed adoption, deck cloning, backup) share this one accessor
+ * so `STORAGE_KEY_PREFIX` is joined in a single place.
+ */
+export function loadSavedDeckRaw(deckName: string): string | null {
+  return profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+}
+
+/** Write a saved deck's raw persisted JSON. Callers own metadata stamping. */
+export function saveSavedDeckRaw(deckName: string, raw: string): void {
+  profileStorage.setItem(STORAGE_KEY_PREFIX + deckName, raw);
+}
+
+/** Whether a deck is saved under this name. */
+export function hasSavedDeck(deckName: string): boolean {
+  return loadSavedDeckRaw(deckName) !== null;
+}
+
+/**
+ * Drop a saved deck's payload and nothing else. Use {@link deleteDeck} to
+ * retire a deck; this exists for the rename path, which moves the metadata
+ * and active-deck pointer to the new name rather than clearing them.
+ */
+export function removeSavedDeckRaw(deckName: string): void {
+  profileStorage.removeItem(STORAGE_KEY_PREFIX + deckName);
+}
+
 /**
  * Read a saved deck and return its repaired in-memory form.
  *
@@ -299,7 +328,7 @@ export function deleteFolder(id: string): void {
  */
 export function loadSavedDeck(deckName: string): ParsedDeck | null {
   if (isRandomDeckSelection(deckName)) return null;
-  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = loadSavedDeckRaw(deckName);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as ParsedDeck & Record<string, unknown>;
@@ -312,7 +341,7 @@ export function loadSavedDeck(deckName: string): ParsedDeck | null {
 /** Read the persisted deck-construction format without projecting deck data. */
 export function loadSavedDeckFormat(deckName: string): string | undefined {
   if (isRandomDeckSelection(deckName)) return undefined;
-  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = loadSavedDeckRaw(deckName);
   if (!raw) return undefined;
   try {
     const parsed = JSON.parse(raw) as { format?: unknown };
@@ -331,7 +360,7 @@ export function loadSavedDeckFormat(deckName: string): string | undefined {
  */
 export function loadSavedDeckBracket(deckName: string): CommanderBracket | null {
   if (isRandomDeckSelection(deckName)) return null;
-  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = loadSavedDeckRaw(deckName);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as { bracket?: unknown };
@@ -347,7 +376,7 @@ export function loadSavedDeckBracket(deckName: string): CommanderBracket | null 
  * the deck builder is responsible for the initial save before tagging.
  */
 export function saveSavedDeckBracket(deckName: string, bracket: CommanderBracket | null): void {
-  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = loadSavedDeckRaw(deckName);
   if (!raw) return;
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -356,15 +385,30 @@ export function saveSavedDeckBracket(deckName: string, bracket: CommanderBracket
     } else {
       parsed.bracket = bracket;
     }
-    profileStorage.setItem(STORAGE_KEY_PREFIX + deckName, JSON.stringify(parsed));
+    saveSavedDeckRaw(deckName, JSON.stringify(parsed));
   } catch {
     // Corrupt JSON: leave it alone. The deck builder will overwrite on save.
   }
 }
 
+/**
+ * Read the active-deck pointer. Every consumer goes through this rather than
+ * reaching into the profile store for {@link ACTIVE_DECK_KEY}, so the pointer
+ * has one reader and one writer regardless of which backend holds it.
+ */
+export function loadActiveDeckName(): string | null {
+  return profileStorage.getItem(ACTIVE_DECK_KEY);
+}
+
+/** Set the active-deck pointer, or clear it by passing `null`. */
+export function saveActiveDeckName(deckName: string | null): void {
+  if (deckName === null) profileStorage.removeItem(ACTIVE_DECK_KEY);
+  else profileStorage.setItem(ACTIVE_DECK_KEY, deckName);
+}
+
 /** Load the currently active deck. */
 export function loadActiveDeck(): ParsedDeck | null {
-  const activeName = profileStorage.getItem(ACTIVE_DECK_KEY);
+  const activeName = loadActiveDeckName();
   if (!activeName) return null;
   return loadSavedDeck(activeName);
 }

@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+
+import { profileStorage } from "../services/profileStorage";
 
 import type {
   GameFormat,
@@ -812,6 +814,13 @@ export const usePreferencesStore = create<PreferencesState & PreferencesActions>
     }),
     {
       name: "phase-preferences",
+      // Preferences are part of the user's portable profile, so they live in
+      // the durable profile store alongside the decks rather than in
+      // localStorage. This store is created at module-evaluation time — before
+      // `bootstrap` has hydrated the profile store — so it initially hydrates
+      // from the pre-hydration localStorage fallback and `bootstrap` calls
+      // `persist.rehydrate()` once the durable backend is live.
+      storage: createJSONStorage(() => profileStorage),
       version: 32,
       // v0 → v1: flat aiDifficulty + aiDeckName become aiSeats[0].
       // v1 → v2: discrete animationSpeed/combatPacing enums become numeric

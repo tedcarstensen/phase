@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { GameFormat, MatchType } from "../../adapter/types";
 import type { FeedDeck } from "../../types/feed";
 import {
-  ACTIVE_DECK_KEY,
+  loadActiveDeckName,
   RANDOM_DECK_SELECTION,
   listSavedDeckNames,
   getDeckMeta,
@@ -796,8 +796,8 @@ export function MyDecks({
     setDeckNames(listSavedDeckNames());
   }, [selectedFormat]);
 
-  // Cloud sync's applyRemote() overwrites the user-owned localStorage keys
-  // in place (no page reload). Subscribe to the broadcast so the deck list
+  // Cloud sync's applyRemote() overwrites the user-owned profile keys in
+  // place (no page reload). Subscribe to the broadcast so the deck list
   // re-fetches when a peer device's snapshot lands.
   useEffect(() => {
     const onProfileReplaced = () => setDeckNames(listSavedDeckNames());
@@ -825,7 +825,7 @@ export function MyDecks({
     if (mode !== "select") return;
     if (!onSelectDeck) return;
     if (activeDeckName != null) return;
-    const stored = localStorage.getItem(ACTIVE_DECK_KEY);
+    const stored = loadActiveDeckName();
     if (!stored || !deckNames.includes(stored)) return;
     onSelectDeck(stored);
   }, [mode, activeDeckName, deckNames, onSelectDeck]);

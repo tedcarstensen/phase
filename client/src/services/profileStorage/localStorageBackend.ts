@@ -22,11 +22,15 @@ export function createLocalStorageProfile(
   return {
     backend: "localstorage" satisfies ProfileStorageBackendId,
     getItem: (key) => localStorage.getItem(key),
+    // Both backends notify only on an actual change, so a rewrite of an
+    // identical value never marks the profile dirty for cloud sync.
     setItem: (key, value) => {
+      if (localStorage.getItem(key) === value) return;
       localStorage.setItem(key, value);
       notify(key);
     },
     removeItem: (key) => {
+      if (localStorage.getItem(key) === null) return;
       localStorage.removeItem(key);
       notify(key);
     },

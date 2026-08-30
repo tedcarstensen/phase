@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
-import { ACTIVE_DECK_KEY, isRandomDeckSelection } from "../../../constants/storage";
+import { isRandomDeckSelection, loadActiveDeckName } from "../../../constants/storage";
 import { MenuShell } from "../MenuShell";
 import { MenuActionTile, type MenuTileTone } from "../MenuActionTile";
 import type { TileMotif } from "../TileMotif";
@@ -171,7 +171,7 @@ function ActiveDeckCard() {
   const navigate = useNavigate();
   const [name, setName] = useState<string | null>(null);
   const [colors, setColors] = useState<string[] | null>(null);
-  useEffect(() => setName(localStorage.getItem(ACTIVE_DECK_KEY)), []);
+  useEffect(() => setName(loadActiveDeckName()), []);
 
   // Resolve the deck's representative card so the card can show real art, the
   // same way the deck tiles do. Hook runs unconditionally (Rules of Hooks);

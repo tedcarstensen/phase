@@ -24,6 +24,7 @@ import {
 } from "./services/profileStorage";
 import { installTelemetry } from "./services/telemetryEvents";
 import { initializeHostPlatform } from "./services/platform";
+import { usePreferencesStore } from "./stores/preferencesStore";
 
 export async function bootstrap(): Promise<void> {
   await initializeHostPlatform();
@@ -39,6 +40,13 @@ export async function bootstrap(): Promise<void> {
   // Cloud-sync restores its Supabase session from an App effect, so migration
   // must finish before React mounts and that effect can observe the profile.
   await importLegacyStorage();
+
+  // The preferences store is created at module-evaluation time, before either
+  // of the migrations above could have run, so its persisted slice is re-read
+  // here now that the durable profile store is live and any staged legacy
+  // import has landed. React has not mounted yet, so nothing renders stale
+  // defaults in between.
+  await usePreferencesStore.persist.rehydrate();
 
   // StrictMode is scoped inside App.tsx instead of wrapping the root. P2P game
   // sessions own PeerJS resources whose cleanup is intentionally destructive, so

@@ -27,7 +27,8 @@ import {
 import { ManaSymbol } from "../components/mana/ManaSymbol";
 import { menuButtonClass } from "../components/menu/buttonStyles";
 import {
-  ACTIVE_DECK_KEY,
+  loadActiveDeckName,
+  saveActiveDeckName,
   isRandomDeckSelection,
   loadSavedDeckBracket,
   touchDeckPlayed,
@@ -117,7 +118,7 @@ export function GameSetupPage() {
 
   // Restore last session on mount
   useEffect(() => {
-    setActiveDeckName(localStorage.getItem(ACTIVE_DECK_KEY));
+    setActiveDeckName(loadActiveDeckName());
 
     // Allow direct format entry via ?format= search param
     const fmtParam = searchParams.get("format") as GameFormat | null;
@@ -159,7 +160,7 @@ export function GameSetupPage() {
   // parent commit.
   const handleSelectDeck = useCallback((name: string) => {
     setActiveDeckName(name);
-    localStorage.setItem(ACTIVE_DECK_KEY, name);
+    saveActiveDeckName(name);
   }, []);
 
   const handleEditDeck = useCallback(

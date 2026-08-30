@@ -1139,7 +1139,7 @@ function DataSection() {
             ? " " + t("data.skippedMalformed", { count: result.malformedKeys.length })
             : "";
         setStatus(base + malformedSuffix);
-        // Zustand stores read from localStorage at boot — reload so every
+        // Zustand stores read the profile at boot — reload so every
         // subscriber picks up the restored data instead of holding stale state.
         setTimeout(() => {
           window.location.reload();

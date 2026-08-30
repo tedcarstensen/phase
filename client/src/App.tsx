@@ -67,7 +67,7 @@ function AppContent() {
   useFeedInitialization();
   useHostingSession();
 
-  // One-shot localStorage migrations. Must run before cloud-sync init so the
+  // One-shot saved-deck repairs. Must run before cloud-sync init so the
   // first sync sees the canonical (repaired) deck shapes and doesn't push a
   // tab full of "changed" decks that are byte-identical after repair.
   useEffect(() => {

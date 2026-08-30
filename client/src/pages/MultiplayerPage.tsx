@@ -19,7 +19,12 @@ import { MenuParticles } from "../components/menu/MenuParticles";
 import { MenuPanel, MenuShell } from "../components/menu/MenuShell";
 import { menuButtonClass } from "../components/menu/buttonStyles";
 import { MyDecks } from "../components/menu/MyDecks";
-import { ACTIVE_DECK_KEY, loadActiveDeck, touchDeckPlayed } from "../constants/storage";
+import {
+  loadActiveDeck,
+  loadActiveDeckName,
+  saveActiveDeckName,
+  touchDeckPlayed,
+} from "../constants/storage";
 import { parseRoomCode, stripPeerIdPrefix } from "../network/connection";
 import { evaluateDeckCompatibility } from "../services/deckCompatibility";
 import { expandParsedDeck } from "../services/deckParser";
@@ -142,7 +147,7 @@ export function MultiplayerPage() {
   const [liveCheck, setLiveCheck] = useState<LiveCheck>({ status: "idle" });
 
   useEffect(() => {
-    setActiveDeckName(localStorage.getItem(ACTIVE_DECK_KEY));
+    setActiveDeckName(loadActiveDeckName());
   }, []);
 
   useEffect(() => {
@@ -231,7 +236,7 @@ export function MultiplayerPage() {
   // to wherever the user triggered the "Change" affordance from.
   const handleSelectDeck = (name: string) => {
     setActiveDeckName(name);
-    localStorage.setItem(ACTIVE_DECK_KEY, name);
+    saveActiveDeckName(name);
 
     // Only auto-advance out of deck-select. When this handler fires from
     // other views (e.g. adopting an imported deck), we don't want to
@@ -345,7 +350,7 @@ export function MultiplayerPage() {
   // side after the room is already open.
   const executeAction = useCallback(
     async (action: PendingAction): Promise<boolean> => {
-      const deckName = localStorage.getItem(ACTIVE_DECK_KEY);
+      const deckName = loadActiveDeckName();
       if (!deckName) {
         showToast(t("page.selectDeckFirst"));
         return false;
