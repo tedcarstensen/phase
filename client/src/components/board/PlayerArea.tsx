@@ -439,6 +439,13 @@ export function PlayerArea({
       }`}
       data-testid={`player-area-${playerId}`}
       data-phased-out={isPhasedOut ? "true" : undefined}
+      // Reserves the left gutter the portrait zone-pile rail sits in (see
+      // `--game-mobile-pile-gutter` in index.css). Every full-width area carries
+      // it, not just the viewer's own: the rail is anchored to the viewport's
+      // left edge and, on a short phone, is tall enough to reach the focused
+      // opponent's row. Split-overview seat panes are excluded — they are
+      // column-width already and the rail never reaches across them.
+      {...(splitOverview ? {} : { "data-player-area-gutter": "" })}
     >
       <div
         className={`flex min-w-0 flex-1 flex-col px-1 ${areaGap} ${verticalPlacement}`}

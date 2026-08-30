@@ -1372,13 +1372,12 @@ function GamePageContent({
   const playerZoneRailStyle: ZoneRailStyle = isMobile
     ? { "--card-w": "28px", "--card-h": "39px" }
     : { "--card-w": "clamp(45px, 4.5vw, 70px)", "--card-h": "clamp(63px, 6.3vw, 98px)" };
-  // 44px wide on mobile, not 38: each pile is a button (open the zone viewer),
-  // so it owes the same 44×44 floor as every other touch control. The height
-  // follows from the card aspect ratio the desktop clamp already encodes
-  // (63/45), which keeps the pile art undistorted.
-  const pileSize = isMobile
-    ? { width: "44px", height: "62px" }
-    : { width: "clamp(45px, 4.5vw, 70px)", height: "clamp(63px, 6.3vw, 98px)" };
+  // Sizing lives in index.css (`--game-pile-w` / `--game-pile-h`) rather than in
+  // an `isMobile` branch here: the tile has three responsive sizes (desktop
+  // clamp, small viewport, square in the portrait gutter) and only CSS can pick
+  // between them on orientation. Every one of them clears the 44px touch floor —
+  // each pile is a button that opens the zone viewer.
+  const pileSize = { width: "var(--game-pile-w)", height: "var(--game-pile-h)" };
   const handleViewZone = useCallback(
     (
       zone: "graveyard" | "exile" | "library",
@@ -1625,7 +1624,10 @@ function GamePageContent({
             // Anchor box-scale to the bottom-left dock corner.
             style={{ ...playerZoneRailStyle, transformOrigin: "bottom left" }}
           >
-            <div className="flex items-end gap-2">
+            {/* Portrait phones stack the rail into the narrow left gutter the
+                battlefield reserves (`--game-mobile-pile-gutter`); every other
+                viewport keeps the wide row. */}
+            <div className="flex items-end gap-2 max-lg:portrait:flex-col max-lg:portrait:items-start max-lg:portrait:gap-1">
               <ExilePile
                 playerId={perspectivePlayerId}
                 size={pileSize}

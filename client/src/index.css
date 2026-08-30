@@ -102,6 +102,12 @@
     linear-gradient(180deg, #040816 0%, #050b1d 36%, #02050f 100%);
   --measure: 66ch;
   --measure-tight: 48ch;
+
+  /* Zone-pile (graveyard / library / exile) tile size. A token rather than a JS
+     `isMobile` branch, so the breakpoints live with every other responsive card
+     size instead of being re-derived from `window.innerWidth`. */
+  --game-pile-w: clamp(45px, 4.5vw, 70px);
+  --game-pile-h: clamp(63px, 6.3vw, 98px);
 }
 
 /* Raised top-lit glass card surface (the gradient companion to bg-surface-*). */
@@ -602,22 +608,60 @@ select.select-dark option {
 @media (width < 64rem) and (orientation: portrait) {
   :root {
     --game-mobile-hand-lift: 1rem;
-    --game-mobile-pile-lift: 16rem;
     --game-mobile-command-lift: 0.5rem;
     --game-mobile-player-hud-lift: 0.5rem;
     --game-mobile-player-hud-shift-x: 1.125rem;
+    /* Headroom for the fanned hand's ARC: the outer cards ride above the hand
+       row's own top edge (`getArcCoefficient` holds the edge lift near 54px), so
+       the pile rail has to clear the arc, not just the row. */
+    --game-mobile-hand-arc: 3.5rem;
+    /* Width the battlefield hands back to the zone-pile rail: one 44px tile,
+       the widget's own `p-1`, and the count badge's `-right-1` overhang. */
+    --game-mobile-pile-gutter: 3.5rem;
+    /* Square pile tiles. The rail is a narrow left gutter in portrait, and a
+       square tile is both the 44px touch floor and an art crop that still reads
+       (the pile images are `object-cover`). */
+    --game-pile-w: 44px;
+    --game-pile-h: 44px;
   }
 
   [data-flex-zone="player-row"] {
-    height: min(calc(0.24 * (100dvh - var(--game-top-overlay-offset, 0px))), 190px) !important;
+    /* Named so the pile rail below can DERIVE its lift from the row it has to
+       clear, instead of restating it as a constant. */
+    --game-mobile-player-row-h: min(calc(0.24 * (100dvh - var(--game-top-overlay-offset, 0px))), 190px);
+    height: var(--game-mobile-player-row-h) !important;
   }
 
   [data-flex-zone="playerHandRow"] {
     transform: translateY(calc(-1 * var(--game-mobile-hand-lift)));
   }
 
+  /* The rail parks immediately above the fanned hand — the hand row's height,
+     plus the lift applied to it, plus the arc its outer cards ride on. It used
+     to be a hand-tuned constant per viewport bucket (16rem / 18.5rem / 12.5rem);
+     those reproduced this derivation on the phones they were measured on and
+     drifted on every other one. On a short viewport the constant exceeded the
+     row's whole height, so the rail escaped the row entirely and landed on the
+     land column — the reported "lands overlap graveyard and deck and exile".
+     `top: auto` is what makes that a real auto-height box: with Tailwind's
+     `inset-y-0` still supplying `top: 0`, an over-constrained box resolved to
+     zero height and simply overflowed upward by an unbounded amount. */
   [data-flex-zone="playerPiles"] {
-    bottom: var(--game-mobile-pile-lift) !important;
+    top: auto !important;
+    bottom: calc(
+      var(--game-mobile-player-row-h) + var(--game-mobile-hand-lift) +
+        var(--game-mobile-hand-arc)
+    ) !important;
+  }
+
+  /* Reserve the gutter the rail occupies. Overlaying it on the battlefield is
+     what put the piles on top of the lands: the lands column is the leftmost
+     cell of the player's middle row and `justify-start`, so it grew straight
+     into the rail. Reserving is what makes this robust — the rail's height is
+     content-driven (one to three piles), so no lift value can guarantee it
+     stays clear of a column it is allowed to overlap. */
+  [data-player-area-gutter] {
+    padding-left: var(--game-mobile-pile-gutter);
   }
 
   [data-command-dock="player"] {
@@ -686,7 +730,6 @@ select.select-dark option {
 @media (width < 64rem) and (max-aspect-ratio: 10/11) {
   :root {
     --game-mobile-hand-lift: 3.25rem;
-    --game-mobile-pile-lift: 18.5rem;
     --game-mobile-command-lift: 0.75rem;
     --game-mobile-player-hud-lift: 1.25rem;
     --game-mobile-player-hud-shift-x: 1.5rem;
@@ -699,7 +742,6 @@ select.select-dark option {
 @media (width < 64rem) and (orientation: portrait) and (max-height: 500px) {
   :root {
     --game-mobile-hand-lift: 0.75rem;
-    --game-mobile-pile-lift: 12.5rem;
     --game-mobile-command-lift: 0.25rem;
     --game-mobile-player-hud-lift: 0.25rem;
     --game-mobile-player-hud-shift-x: 0.75rem;
