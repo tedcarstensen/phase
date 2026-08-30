@@ -76,7 +76,9 @@ describe("card face sizing hook", () => {
   });
 
   it("defines the hand-view scale once, capped so a phone shows more than one card", () => {
-    expect(INDEX_CSS).toContain("--hand-view-card-h: min(clamp(200px, 40vh, 360px), 87vw)");
+    expect(INDEX_CSS).toContain(
+      "--hand-view-card-h: min(clamp(200px, 40vh, 360px), 87vw, 52vh)",
+    );
     expect(INDEX_CSS).toContain("--hand-view-card-w: calc(var(--hand-view-card-h) * 5 / 7)");
 
     // The mulligan prompts must read that token rather than restating it — the

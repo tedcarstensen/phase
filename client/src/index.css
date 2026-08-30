@@ -115,8 +115,11 @@
      strip behind scry / surveil / search / tutor, and the zone viewer).
      Height-led, because the short axis is what runs out first — then capped by
      viewport WIDTH so a portrait phone shows more than one card at a time
-     instead of a single card wider than the screen. 5/7 is the card aspect. */
-  --hand-view-card-h: min(clamp(200px, 40vh, 360px), 87vw);
+     instead of a single card wider than the screen. The `52vh` cap only ever
+     binds once the clamp's 200px FLOOR is doing the work (below ~500px of
+     viewport height, i.e. a landscape phone), where an unyielding floor would
+     outgrow the modal it sits in. 5/7 is the card aspect. */
+  --hand-view-card-h: min(clamp(200px, 40vh, 360px), 87vw, 52vh);
   --hand-view-card-w: calc(var(--hand-view-card-h) * 5 / 7);
 }
 
