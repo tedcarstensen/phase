@@ -16,7 +16,7 @@ use phase_ai::config::AiDifficulty;
 use serde::{Deserialize, Serialize};
 
 use crate::session::{AiDriverFault, FullSessionKey};
-use crate::takeback::{RewindOption, RewindTarget};
+use crate::takeback::{RewindOption, RewindTarget, TakebackScope, UndoableAction};
 
 /// Full game wire protocol version. Kept numerically aligned with the lobby
 /// broker while state/action messages share the same WebSocket protocol enum.
@@ -547,6 +547,14 @@ pub enum ServerMessage {
         /// Empty for every deployment except a `SingleUser` sidecar.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         rewind_targets: Vec<RewindOption>,
+        /// The recipient's **own** retained actions, each selectable as
+        /// `RewindTarget::Action`. Already narrowed to this seat by
+        /// `RewindPublication::for_seat`, so the client renders the rows it is
+        /// handed and decides nothing. A separate field from `rewind_targets`
+        /// rather than a widened one: an additive field is what keeps a client
+        /// that predates granular rewind reading this message at all.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        undoable_actions: Vec<UndoableAction>,
     },
     StateUpdate {
         /// Monotonic server-authored snapshot revision. Reused for read-only
@@ -589,6 +597,11 @@ pub enum ServerMessage {
         /// Empty for every deployment except a `SingleUser` sidecar.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         rewind_targets: Vec<RewindOption>,
+        /// The recipient's own retained actions, published alongside the state
+        /// they describe for the same reason as `rewind_targets`. See the
+        /// `GameStarted` field of the same name.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        undoable_actions: Vec<UndoableAction>,
     },
     ActionRejected {
         rejection: ActionRejection,
@@ -782,6 +795,13 @@ pub enum ServerMessage {
     TakebackRequested {
         requester: PlayerId,
         requester_name: String,
+        /// What approving would discard. Optional purely for wire
+        /// compatibility with clients that predate granular rewind — the
+        /// server always populates it, and a client that renders nothing here
+        /// degrades to the pre-existing "approve?" prompt rather than
+        /// mis-describing the request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<TakebackScope>,
     },
     /// The pending takeback request has been resolved, either by unanimous
     /// approval, a decline, or the requester cancelling it. When
@@ -1415,6 +1435,7 @@ mod tests {
             full_key: None,
             events: vec![],
             rewind_targets: vec![],
+            undoable_actions: vec![],
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
@@ -1470,6 +1491,7 @@ mod tests {
             full_key: None,
             events: vec![],
             rewind_targets: vec![],
+            undoable_actions: vec![],
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
@@ -2872,6 +2894,7 @@ mod tests {
         let state = GameState::new_two_player(42);
         let viewer_interaction =
             engine::game::interaction::derive_viewer_interaction(&state, &state, PlayerId(0));
+        let undoable_actions: Vec<UndoableAction> = Vec::new();
         let build = |rewind_targets: Vec<RewindOption>| ServerMessage::StateUpdate {
             state_revision: 4,
             state: state.clone(),
@@ -2887,6 +2910,7 @@ mod tests {
             derived: Default::default(),
             viewer_interaction: viewer_interaction.clone(),
             rewind_targets,
+            undoable_actions: undoable_actions.clone(),
         };
 
         let populated = build(vec![RewindOption {
@@ -2918,6 +2942,84 @@ mod tests {
                 assert!(rewind_targets.is_empty(), "absent field decodes to empty");
             }
             _ => panic!("wrong variant"),
+        }
+    }
+
+    /// R16. The granular list rides the same message under the same additive
+    /// rules: present when populated, absent from the wire when empty, and
+    /// decoding to empty for a producer that never heard of it. The
+    /// `!contains` assertion is what keeps a pre-rewind client's `StateUpdate`
+    /// byte-identical to what it saw before.
+    #[test]
+    fn state_update_undoable_actions_roundtrip_and_omission() {
+        let state = GameState::new_two_player(42);
+        let viewer_interaction =
+            engine::game::interaction::derive_viewer_interaction(&state, &state, PlayerId(0));
+        let build = |undoable_actions: Vec<UndoableAction>| ServerMessage::StateUpdate {
+            state_revision: 4,
+            state: state.clone(),
+            events: vec![],
+            legal_actions: vec![],
+            auto_pass_recommended: false,
+            end_continuous_effect_offers: vec![],
+            mana_payment_shortcut_actions: vec![],
+            eliminated_players: vec![],
+            log_entries: vec![],
+            spell_costs: HashMap::new(),
+            legal_actions_by_object: HashMap::new(),
+            derived: Default::default(),
+            viewer_interaction: viewer_interaction.clone(),
+            rewind_targets: vec![],
+            undoable_actions,
+        };
+
+        let row = UndoableAction {
+            sequence: 7,
+            actor: PlayerId(1),
+            action: "CastSpell".to_string(),
+            turn_number: 3,
+            phase: engine::types::phase::Phase::PreCombatMain,
+            significance: crate::takeback::RewindSignificance::Decisive,
+        };
+        let json = serde_json::to_string(&build(vec![row.clone()])).unwrap();
+        assert!(json.contains(r#""sequence":7"#));
+        assert!(json.contains(r#""significance":"decisive""#));
+        match serde_json::from_str::<ServerMessage>(&json).unwrap() {
+            ServerMessage::StateUpdate {
+                undoable_actions, ..
+            } => assert_eq!(undoable_actions, vec![row]),
+            _ => panic!("wrong variant"),
+        }
+
+        let empty = serde_json::to_string(&build(vec![])).unwrap();
+        assert!(
+            !empty.contains("undoable_actions"),
+            "an empty list must not appear on the wire at all"
+        );
+        match serde_json::from_str::<ServerMessage>(&empty).unwrap() {
+            ServerMessage::StateUpdate {
+                undoable_actions, ..
+            } => assert!(undoable_actions.is_empty(), "absent field decodes to empty"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    /// R17. `RewindTarget::Action` must survive the adjacently-tagged
+    /// `ClientMessage` envelope with its handle intact — a selector whose id
+    /// does not round-trip silently retargets the rollback.
+    #[test]
+    fn request_takeback_action_roundtrips_with_exact_wire_bytes() {
+        let msg = ClientMessage::RequestTakeback(Some(RewindTarget::Action { sequence: 41 }));
+        let json = serde_json::to_string(&msg).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"RequestTakeback","data":{"kind":"action","sequence":41}}"#
+        );
+        match serde_json::from_str::<ClientMessage>(&json).unwrap() {
+            ClientMessage::RequestTakeback(Some(RewindTarget::Action { sequence })) => {
+                assert_eq!(sequence, 41);
+            }
+            other => panic!("wrong variant: {other:?}"),
         }
     }
 
@@ -2955,6 +3057,7 @@ mod tests {
         let msg = ServerMessage::TakebackRequested {
             requester: PlayerId(1),
             requester_name: "Alice".to_string(),
+            scope: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
@@ -2962,6 +3065,7 @@ mod tests {
             ServerMessage::TakebackRequested {
                 requester,
                 requester_name,
+                ..
             } => {
                 assert_eq!(requester, PlayerId(1));
                 assert_eq!(requester_name, "Alice");

@@ -46,7 +46,7 @@ use crate::game_log::GameFileCache;
 use crate::persist::{PersistedLobbyMeta, PersistedSession};
 use crate::protocol::PlayerSlotInfo;
 use crate::reconnect::ReconnectManager;
-use crate::takeback::PendingTakeback;
+use crate::takeback::{PendingTakeback, TakebackEntry};
 
 /// Bind the engine's interaction authority to a freshly created or restored state.
 ///
@@ -434,12 +434,19 @@ pub struct GameSession {
     /// A "request takeback" awaiting unanimous human approval, if any. See
     /// `crate::takeback` for the GH #1507 multiplayer-safe undo flow.
     pub pending_takeback: Option<PendingTakeback>,
-    /// Rolling buffer of (actor, state) pairs — the authoritative state
+    /// Rolling buffer of rollback points — the authoritative state
     /// immediately preceding each state-mutating action, tagged with which
-    /// player took that action. Tagged by actor so a takeback request can
-    /// find the requester's *own* last action even when other players have
-    /// acted since (see `crate::takeback::GameSession::request_takeback`).
-    pub takeback_history: VecDeque<(PlayerId, GameState)>,
+    /// player took that action and how much that action committed. Tagged by
+    /// actor so a takeback request can find the requester's *own* actions even
+    /// when other players have acted since; classified by significance so
+    /// priority-pass and mana-tap traffic cannot evict the reach a granular
+    /// request needs (see `crate::takeback::retain_takeback_entry`).
+    pub takeback_history: VecDeque<TakebackEntry>,
+    /// Monotonic id source for `TakebackEntry::sequence`. Session-lifetime and
+    /// never reset — not even at the game boundary that retires both rings —
+    /// so a handle a client captured in a previous game misses rather than
+    /// collides. Runtime-only, matching the rings themselves.
+    pub rewind_sequence: u64,
     /// Rolling buffer of authoritative states, each one the post-state of a
     /// transition that came to rest at the start of the turn it announced.
     /// Strictly increasing in `turn_number` **within a game**, capped at
@@ -1271,6 +1278,7 @@ impl GameSession {
             // Neither ring is persisted: a rollback offer is a live-session
             // affordance, not durable state.
             takeback_history: VecDeque::new(),
+            rewind_sequence: 0,
             turn_rewind_history: VecDeque::new(),
             rewind_game_number,
         })
@@ -1460,6 +1468,7 @@ impl SessionManager {
             start_events: Vec::new(),
             pending_takeback: None,
             takeback_history: VecDeque::new(),
+            rewind_sequence: 0,
             turn_rewind_history: VecDeque::new(),
             rewind_game_number,
         };
@@ -1835,7 +1844,13 @@ impl SessionManager {
         };
 
         let records_takeback = !action.is_actor_scoped_preference();
-        let pre_action_state = records_takeback.then(|| session.state.clone());
+        // A rollback point is the pre-action state *plus* the action it
+        // precedes — the label and the retention class both come from the
+        // action, which the `match` below consumes. Bound as one `Option` so
+        // the two halves cannot get out of step, and gated on the same
+        // predicate so a preference action pays for neither clone.
+        let pending_rewind_point =
+            records_takeback.then(|| (session.state.clone(), action.clone()));
 
         // Set player names for log resolution.
         session.state.log_player_names = session.display_names.clone();
@@ -1879,8 +1894,8 @@ impl SessionManager {
             action => apply_with_rejection(&mut session.state, player, action)
                 .map_err(SessionActionError::Rejected)?,
         };
-        if let Some(snapshot) = pre_action_state {
-            session.push_takeback_state(player, snapshot);
+        if let Some((snapshot, recorded_action)) = pending_rewind_point {
+            session.push_takeback_state(player, snapshot, &recorded_action);
         }
 
         info!(
@@ -1894,8 +1909,8 @@ impl SessionManager {
         let (new_legal_actions, spell_costs, by_object) = engine_legal_actions_full(&session.state);
         let auto_pass = auto_pass_recommended(&session.state, &new_legal_actions);
 
-        // Turn-rewind bookkeeping, deliberately OUTSIDE the `pre_action_state`
-        // block above: an `is_actor_scoped_preference` action records no
+        // Turn-rewind bookkeeping, deliberately OUTSIDE the
+        // `pending_rewind_point` block above: an `is_actor_scoped_preference` action records no
         // takeback snapshot but still goes through `apply` and can auto-advance
         // into a new turn. The two rings are independent; coupling them would
         // lose exactly those boundaries. The post-state clone the broadcast
@@ -2009,7 +2024,7 @@ impl SessionManager {
             .map_err(SessionActionError::Rejected)?;
 
         if !applied.action.is_actor_scoped_preference() {
-            session.push_takeback_state(player, pre_action_state);
+            session.push_takeback_state(player, pre_action_state, &applied.action);
         }
 
         info!(
@@ -3355,6 +3370,258 @@ mod tests {
 
     use crate::takeback::{RewindOption, RewindTarget, TakebackOutcome, MAX_TAKEBACK_HISTORY};
 
+    /// Drives `count` priority passes through the transport handler, always
+    /// from whichever seat actually holds priority, so the action ring fills
+    /// with genuine alternating entries rather than hand-pushed fixtures.
+    fn pass_priority_times(
+        mgr: &mut SessionManager,
+        code: &str,
+        token0: &str,
+        token1: &str,
+        count: usize,
+    ) {
+        for _ in 0..count {
+            let priority_player = match &mgr.sessions[code].state.waiting_for {
+                WaitingFor::Priority { player } => *player,
+                other => panic!("expected Priority, got {other:?}"),
+            };
+            let token = if priority_player == PlayerId(0) {
+                token0
+            } else {
+                token1
+            };
+            mgr.handle_action(code, token, GameAction::PassPriority)
+                .expect("priority holder may always pass");
+        }
+    }
+
+    /// The published rollback points for `player`, newest last.
+    fn own_sequences(session: &GameSession, player: PlayerId) -> Vec<u64> {
+        session
+            .undoable_actions(player)
+            .into_iter()
+            .map(|option| option.sequence)
+            .collect()
+    }
+
+    /// G1. **The feature.** A player reaches a *specific* earlier action of
+    /// their own, not merely their most recent one, and the state they get is
+    /// the one the published row described.
+    ///
+    /// The `assert_ne!` against the newest handle is the reach guard: without
+    /// it this test would still pass if `Action` silently resolved to
+    /// `LastAction`.
+    #[test]
+    fn a_granular_request_reaches_a_specific_earlier_action() {
+        let (mut mgr, code, token0, token1) = setup_two_player_game();
+        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+
+        let session = mgr.sessions.get_mut(&code).unwrap();
+        let mine = own_sequences(session, PlayerId(0));
+        assert!(
+            mine.len() >= 2,
+            "need more than one of my own rollback points to reach past the newest: {mine:?}"
+        );
+        let (&oldest, &newest) = (
+            mine.first().expect("non-empty"),
+            mine.last().expect("non-empty"),
+        );
+        assert_ne!(
+            oldest, newest,
+            "reach guard: the target is not `LastAction`"
+        );
+
+        let expected = session
+            .takeback_history
+            .iter()
+            .find(|entry| entry.sequence == oldest)
+            .expect("the published handle names a retained entry")
+            .state
+            .clone();
+
+        assert_eq!(
+            session.request_takeback(PlayerId(0), RewindTarget::Action { sequence: oldest }),
+            Ok(TakebackOutcome::Pending)
+        );
+        assert_eq!(
+            session.respond_takeback(PlayerId(1), true),
+            Ok(TakebackOutcome::Approved)
+        );
+        assert_eq!(
+            session.state.waiting_for, expected.waiting_for,
+            "the restored state must be the one the published row described"
+        );
+        assert!(
+            !own_sequences(session, PlayerId(0)).contains(&newest),
+            "rollback points on the discarded branch must not survive the rollback"
+        );
+    }
+
+    /// G2. A player may only anchor a rollback on their **own** action. This is
+    /// the ownership rule `LastAction` always implied, and the `Action`
+    /// selector is the first way to try to violate it — a refusal here is what
+    /// keeps "undo my misclick" from becoming "undo your play."
+    #[test]
+    fn a_player_may_not_anchor_a_rollback_on_another_seats_action() {
+        let (mut mgr, code, token0, token1) = setup_two_player_game();
+        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+
+        let session = mgr.sessions.get_mut(&code).unwrap();
+        let theirs = *own_sequences(session, PlayerId(1))
+            .last()
+            .expect("the other seat has acted");
+        // Reach guard: the same handle IS resolvable — by its owner.
+        assert!(session
+            .undoable_actions(PlayerId(1))
+            .iter()
+            .any(|option| option.sequence == theirs));
+
+        assert_eq!(
+            session.request_takeback(PlayerId(0), RewindTarget::Action { sequence: theirs }),
+            Err("You may only take back your own actions".to_string())
+        );
+        assert!(
+            session.pending_takeback.is_none(),
+            "a refused request must not leave the table voting"
+        );
+    }
+
+    /// G3. A handle whose entry has been recycled out of the ring is refused
+    /// outright. Selecting by sequence rather than by index is what makes this
+    /// a miss instead of a silent hit on whichever entry now sits at that
+    /// position.
+    #[test]
+    fn a_stale_action_handle_is_refused_rather_than_resolving_to_a_neighbour() {
+        let (mut mgr, code, token0, token1) = setup_two_player_game();
+        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+
+        let session = mgr.sessions.get_mut(&code).unwrap();
+        let live = *own_sequences(session, PlayerId(0))
+            .last()
+            .expect("non-empty");
+        let stale = live + 10_000;
+
+        assert_eq!(
+            session.request_takeback(PlayerId(0), RewindTarget::Action { sequence: stale }),
+            Err("That action is no longer available to take back".to_string())
+        );
+        // Reach guard: the live handle from the same ring resolves.
+        assert_eq!(
+            session.request_takeback(PlayerId(0), RewindTarget::Action { sequence: live }),
+            Ok(TakebackOutcome::Pending)
+        );
+    }
+
+    /// G4. `LastAction` and the handle of the requester's newest rollback point
+    /// are the same request, because both resolve through
+    /// `resolve_action_rewind`.
+    #[test]
+    fn last_action_and_its_matching_handle_resolve_identically() {
+        let (mut mgr, code, token0, token1) = setup_two_player_game();
+        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+
+        let session = mgr.sessions.get_mut(&code).unwrap();
+        let newest = *own_sequences(session, PlayerId(0))
+            .last()
+            .expect("non-empty");
+
+        session
+            .request_takeback(PlayerId(0), RewindTarget::LastAction)
+            .expect("last-action request");
+        let relative = session
+            .pending_takeback
+            .as_ref()
+            .expect("pending")
+            .target_state
+            .clone();
+        session.cancel_takeback(PlayerId(0)).expect("self-cancel");
+
+        session
+            .request_takeback(PlayerId(0), RewindTarget::Action { sequence: newest })
+            .expect("absolute request");
+        let absolute = &session
+            .pending_takeback
+            .as_ref()
+            .expect("pending")
+            .target_state;
+        assert_eq!(relative.waiting_for, absolute.waiting_for);
+        assert_eq!(relative.turn_number, absolute.turn_number);
+    }
+
+    /// G5. The published list is narrowed to the viewer at the source, so the
+    /// client renders what it is handed. The other seat's non-empty, disjoint
+    /// list is the reach guard against a vacuously empty ring.
+    #[test]
+    fn undoable_actions_publishes_only_the_viewers_own_rollback_points() {
+        let (mut mgr, code, token0, token1) = setup_two_player_game();
+        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+
+        let session = &mgr.sessions[&code];
+        let mine = session.undoable_actions(PlayerId(0));
+        let theirs = session.undoable_actions(PlayerId(1));
+        assert!(!mine.is_empty() && !theirs.is_empty());
+        assert!(mine.iter().all(|option| option.actor == PlayerId(0)));
+        assert!(theirs.iter().all(|option| option.actor == PlayerId(1)));
+        assert!(
+            mine.iter()
+                .all(|option| !theirs.iter().any(|other| other.sequence == option.sequence)),
+            "the two seats' lists must not overlap"
+        );
+        // Labels come from the stored snapshot, not from the live state.
+        let entry_turns: Vec<u32> = session
+            .takeback_history
+            .iter()
+            .filter(|entry| entry.actor == PlayerId(0))
+            .map(|entry| entry.state.turn_number)
+            .collect();
+        assert_eq!(
+            mine.iter()
+                .map(|option| option.turn_number)
+                .collect::<Vec<_>>(),
+            entry_turns
+        );
+    }
+
+    /// G6. Unanimity is only a real safeguard if the approver knows what they
+    /// are approving: a rollback that discards an opponent's response cannot
+    /// un-reveal it, so the depth travels with the prompt. The reconnect replay
+    /// carries the same scope the first broadcast did.
+    #[test]
+    fn a_pending_request_publishes_what_approving_would_discard() {
+        let (mut mgr, code, token0, token1) = setup_two_player_game();
+        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+
+        let session = mgr.sessions.get_mut(&code).unwrap();
+        let oldest = *own_sequences(session, PlayerId(0))
+            .first()
+            .expect("non-empty");
+        let target_turn = session
+            .takeback_history
+            .iter()
+            .find(|entry| entry.sequence == oldest)
+            .expect("retained")
+            .state
+            .turn_number;
+
+        session
+            .request_takeback(PlayerId(0), RewindTarget::Action { sequence: oldest })
+            .expect("granular request");
+
+        match session.pending_takeback_message() {
+            Some(crate::protocol::ServerMessage::TakebackRequested {
+                scope: Some(scope), ..
+            }) => {
+                assert_eq!(scope.turn_number, target_turn);
+                assert_eq!(scope.action.as_deref(), Some("PassPriority"));
+                assert!(
+                    scope.discarded_points >= 2,
+                    "a request reaching past the newest point discards more than one: {scope:?}"
+                );
+            }
+            other => panic!("expected a scoped takeback prompt, got {other:?}"),
+        }
+    }
+
     fn precast_offer_runner() -> (GameRunner, u64) {
         const CHAIN_OF_SMOG: &str = "Target player discards two cards. That player may copy this spell and may choose a new target for that copy.";
         let db = CardDatabase::from_mtgjson(
@@ -3448,7 +3715,7 @@ mod tests {
         let (runner, stale_epoch) = precast_offer_runner();
         let session = mgr.sessions.get_mut(&code).unwrap();
         session.state = runner.state().clone();
-        session.push_takeback_snapshot(P0);
+        session.push_takeback_snapshot(P0, &GameAction::PassPriority);
         apply(
             &mut session.state,
             P0,
@@ -3717,7 +3984,7 @@ mod tests {
         let session = mgr.sessions.get_mut(&code).unwrap();
         // Force a known checkpoint to take back to, since the AI may have
         // already acted past mulligans by the time the game starts.
-        session.push_takeback_snapshot(PlayerId(0));
+        session.push_takeback_snapshot(PlayerId(0), &GameAction::PassPriority);
         let outcome = session
             .request_takeback(PlayerId(0), RewindTarget::LastAction)
             .unwrap();
@@ -3844,7 +4111,7 @@ mod tests {
 
         // Player 0 requests a takeback; with two human seats (0 and 1) it
         // stays Pending until player 1 also approves.
-        session.push_takeback_snapshot(PlayerId(0));
+        session.push_takeback_snapshot(PlayerId(0), &GameAction::PassPriority);
         let outcome = session
             .request_takeback(PlayerId(0), RewindTarget::LastAction)
             .unwrap();
@@ -4349,7 +4616,7 @@ mod tests {
                 s.takeback_history.len() == MAX_TAKEBACK_HISTORY
                     && s.takeback_history
                         .iter()
-                        .all(|(_, st)| st.turn_number > target_turn)
+                        .all(|entry| entry.state.turn_number > target_turn)
             };
             if saturated {
                 break;
@@ -4365,7 +4632,7 @@ mod tests {
             session
                 .takeback_history
                 .iter()
-                .all(|(_, s)| s.turn_number > target_turn),
+                .all(|entry| entry.state.turn_number > target_turn),
             "reach guard: no action-ring entry may still sit in turn {target_turn}"
         );
         let turn_two = target_turn;
@@ -4657,7 +4924,7 @@ mod tests {
             session
                 .takeback_history
                 .iter()
-                .all(|(_, snapshot)| snapshot.turn_number != ai_turn),
+                .all(|entry| entry.state.turn_number != ai_turn),
             "no action-ring entry may sit in turn {ai_turn} — the boundary must have come \
              from `run_ai`'s own results, not from the `handle_action` capture site"
         );
@@ -5840,6 +6107,7 @@ mod tests {
             start_events: Vec::new(),
             pending_takeback: None,
             takeback_history: VecDeque::new(),
+            rewind_sequence: 0,
             turn_rewind_history: VecDeque::new(),
             rewind_game_number: 1,
         };
@@ -6735,11 +7003,18 @@ mod tests {
         let (acting, acting_token, _other, witness) = live_witness(&mgr, &code, &token0, &token1);
 
         let target_state = mgr.sessions[&code].state.clone();
+        let scope = crate::takeback::TakebackScope {
+            turn_number: target_state.turn_number,
+            phase: target_state.phase,
+            action: None,
+            discarded_points: 0,
+        };
         mgr.sessions.get_mut(&code).unwrap().pending_takeback = Some(PendingTakeback {
             requested_by: acting,
             target_state,
             approvals: HashSet::new(),
             history_truncate_len: 0,
+            scope,
         });
 
         let before_slots = mgr.sessions[&code].state.active_interaction_slots.clone();

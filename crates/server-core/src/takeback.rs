@@ -13,12 +13,31 @@
 //! and the authoritative state is left untouched.
 //!
 //! The same machine is parameterized by [`RewindTarget`] rather than
-//! duplicated per granularity: `LastAction` is the original GH #1507 undo, and
-//! `TurnStart` reaches a previous turn boundary — which the action-granular
-//! ring structurally cannot, since every wire `PassPriority` burns one of its
-//! twelve slots. Turn boundaries are captured from each transition's own
-//! post-state into a second ring, and offered only where
+//! duplicated per granularity. `LastAction` is the original GH #1507 undo;
+//! `Action` names any retained rollback point by its stable
+//! [`TakebackEntry::sequence`], so a player can reach a *specific* earlier
+//! action of their own rather than only their most recent one; `TurnStart`
+//! reaches a previous turn boundary. All three resolve through one authority
+//! ([`GameSession::resolve_rewind_target`]) onto the same approval state
+//! machine.
+//!
+//! Reaching an arbitrary earlier action is a *retention* problem, not a
+//! constant-inflation one: every wire `PassPriority` and every mana-source tap
+//! would otherwise burn one of the twelve action slots, so a flat ring reaches
+//! back roughly one priority round. [`RewindSignificance`] splits that traffic
+//! into a recycled noise tier and a reserved decisive tier
+//! ([`retain_takeback_entry`]), which is what makes twelve slots hold twelve
+//! *meaningful* rollback points instead of twelve priority passes.
+//!
+//! Turn boundaries are a genuinely different capture — a transition's own
+//! post-state, kept in a second ring and offered only where
 //! [`offers_turn_rewind`] says so.
+//!
+//! **Whose actions.** A player may only anchor a rollback on one of their
+//! *own* actions, at every granularity. That is not a new restriction: it is
+//! what `LastAction` has always meant, lifted into
+//! [`GameSession::resolve_action_rewind`] so the `Action` selector cannot
+//! quietly widen it into "propose undoing someone else's play."
 //!
 //! This is intentionally a session/room-level concern, not an engine rule —
 //! there is no Comprehensive Rules concept of "undo." The engine is never
@@ -27,8 +46,10 @@
 
 use std::collections::{HashSet, VecDeque};
 
+use engine::types::actions::GameAction;
 use engine::types::events::GameEvent;
 use engine::types::game_state::GameState;
+use engine::types::phase::Phase;
 use engine::types::player::PlayerId;
 use phase_ai::session::AiSession;
 use serde::{Deserialize, Serialize};
@@ -49,6 +70,164 @@ pub const MAX_TAKEBACK_HISTORY: usize = 12;
 /// `HostingMode::SingleUser` sidecar (see [`offers_turn_rewind`]).
 pub const MAX_TURN_REWIND_HISTORY: usize = 5;
 
+/// How many of [`MAX_TAKEBACK_HISTORY`]'s slots may be held by
+/// [`RewindSignificance::Routine`] entries at once.
+///
+/// The reserve is the whole point of the split. Without it, a burst of
+/// priority passes and mana taps evicts every decisive rollback point in the
+/// ring and "undo the spell I misclicked" becomes unreachable after one
+/// priority round — which is exactly the reach failure raising
+/// `MAX_TAKEBACK_HISTORY` would paper over rather than fix. Small because a
+/// routine snapshot is only ever wanted while it is still recent: the payment
+/// steps it belongs to are undone wholesale by rewinding to before the cast
+/// they were paying for.
+pub const MAX_ROUTINE_TAKEBACK_ENTRIES: usize = 4;
+
+/// How much of the game the action following a snapshot committed, and
+/// therefore how aggressively that snapshot may be recycled.
+///
+/// A typed retention class rather than a `bool`, so the policy in
+/// [`retain_takeback_entry`] reads as the two-tier rule it is and so the
+/// published [`UndoableAction`] can label a row without the client inferring
+/// anything from the action name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewindSignificance {
+    /// Flow control, and the incremental steps of a cost that has not been
+    /// committed yet: priority passes, mana-source activations (CR 605.3a),
+    /// pool pins (CR 118.3a), and auto-pass toggles. These are the structural
+    /// noise floor — a single two-player turn produces more of them than the
+    /// entire ring holds.
+    Routine,
+    /// Everything else: putting a spell on the stack, playing a land,
+    /// declaring attackers or blockers, answering an engine prompt. These are
+    /// the actions a player actually asks to take back, so they hold their
+    /// slots against routine traffic.
+    Decisive,
+}
+
+impl RewindSignificance {
+    /// Classifies one action for retention.
+    ///
+    /// Defined by enumerating the *closed* noise set rather than by an
+    /// exhaustive match over all ~130 `GameAction` variants, and the wildcard
+    /// direction is load-bearing: an action this classifier has never heard of
+    /// is `Decisive`, i.e. it keeps its slot. A new engine action can therefore
+    /// only ever be over-retained, never silently recycled out from under a
+    /// player who wanted it back.
+    pub fn of(action: &GameAction) -> Self {
+        match action {
+            // CR 117.3d: passing priority commits nothing; it is the single
+            // highest-volume action on the wire.
+            GameAction::PassPriority
+            // CR 605.3a + CR 118.3a: mana-source activation, pool pinning and
+            // their inverses are steps *inside* an uncommitted payment.
+            | GameAction::TapLandForMana { .. }
+            | GameAction::ActivateManaSource { .. }
+            | GameAction::UntapLandForMana { .. }
+            | GameAction::BackToManaPayment
+            | GameAction::SpendPoolMana { .. }
+            | GameAction::UnspendPoolMana { .. }
+            | GameAction::PayManaAbilityMana { .. }
+            | GameAction::ChooseManaColor { .. }
+            // CR 702.51a (convoke) + CR 702.180a (harmonize): alternative ways
+            // to pay the same uncommitted cost.
+            | GameAction::TapForConvoke { .. }
+            | GameAction::HarmonizeTap { .. }
+            // Auto-pass is a client-side pacing preference. `CancelAutoPass`
+            // never reaches here (`is_actor_scoped_preference` records no
+            // snapshot for it); it is listed so the pair cannot drift apart.
+            | GameAction::SetAutoPass { .. }
+            | GameAction::CancelAutoPass => Self::Routine,
+            _ => Self::Decisive,
+        }
+    }
+}
+
+/// One recorded rollback point: the authoritative state immediately before one
+/// player's action, together with everything the server needs to publish and
+/// re-select it.
+///
+/// Replaces the previous `(PlayerId, GameState)` tuple because a granular
+/// selector needs three things a tuple has nowhere to put: a stable handle, a
+/// retention class, and a label.
+#[derive(Debug, Clone)]
+pub struct TakebackEntry {
+    /// Stable for the life of the session and never reused — not reset at a
+    /// match's game boundary, unlike the rings themselves.
+    ///
+    /// A client selects a rollback point by this id rather than by index
+    /// *because* retention evicts from the middle of the ring: an index
+    /// captured one action ago can name a different entry by the time the
+    /// request arrives, whereas a stale sequence resolves to nothing and is
+    /// refused. Starts at 1, so `0` is never a live handle.
+    pub sequence: u64,
+    /// The player whose action this snapshot precedes. Also the only player
+    /// permitted to anchor a rollback on it — see
+    /// [`GameSession::resolve_action_rewind`].
+    pub actor: PlayerId,
+    /// `GameAction::variant_name()` of that action. A coarse action *type*, not
+    /// its payload: the fact that a player cast a spell at a given point is
+    /// public (CR 601.2), the identity of what they cast is not necessarily,
+    /// and only the former is retained here.
+    pub action: &'static str,
+    pub significance: RewindSignificance,
+    /// The authoritative state as it stood immediately before `action`.
+    pub state: GameState,
+}
+
+/// One action a player may ask the table to roll back to, as published by the
+/// server.
+///
+/// Every field is read from the stored [`TakebackEntry`] and its own snapshot,
+/// never recomputed at publication time, so the row a player clicks describes
+/// exactly the state they would get. Published per viewer and already narrowed
+/// to that viewer's own actions, so the client renders the list it is handed
+/// and derives nothing.
+///
+/// Deliberately *not* a sibling of [`RewindOption`]: that publishes a turn
+/// boundary captured from a transition's post-state and offered only on a
+/// sidecar; this publishes an action's pre-state and is offered in every mode.
+/// They share no field and no gating.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UndoableAction {
+    /// Echo back as `RewindTarget::Action { sequence }` to select this row.
+    pub sequence: u64,
+    pub actor: PlayerId,
+    pub action: String,
+    pub turn_number: u32,
+    pub phase: Phase,
+    pub significance: RewindSignificance,
+}
+
+/// What an approver is being asked to give up, published with the request.
+///
+/// Unanimity is the whole safety argument for rolling back past another
+/// player's action — a rollback that discards an opponent's response cannot
+/// un-reveal that they held it, so the only thing that can legitimize the leak
+/// is the affected player's own consent. Consent to "some rollback" is not
+/// consent to "a rollback nine actions deep", so the depth travels with the
+/// prompt rather than being left for the approver to guess.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TakebackScope {
+    /// Turn and phase of the state that would be restored, read from the target
+    /// snapshot itself.
+    pub turn_number: u32,
+    pub phase: Phase,
+    /// `variant_name()` of the requester's action being taken back, or `None`
+    /// for a `TurnStart` rewind, which is anchored on a turn boundary rather
+    /// than on any one action.
+    pub action: Option<String>,
+    /// How many retained rollback points are discarded, the anchor included.
+    ///
+    /// A **lower bound** on actions discarded, not an exact count: routine
+    /// steps are recycled out of the ring by [`retain_takeback_entry`] long
+    /// before they leave the game's history. `turn_number`/`phase` are the
+    /// exact statement of how far back this reaches; this is the coarse
+    /// "how much am I giving up" number beside it.
+    pub discarded_points: usize,
+}
+
 /// How far back a rollback request reaches.
 ///
 /// Parameterizes the one rollback machine rather than growing a sibling wire
@@ -64,6 +243,18 @@ pub enum RewindTarget {
     /// most recent state-mutating action.
     #[default]
     LastAction,
+    /// Roll back to the snapshot taken immediately before one *specific*
+    /// retained action of the requester's, named by its
+    /// [`TakebackEntry::sequence`].
+    ///
+    /// The general form of `LastAction`, which stays as a distinct selector
+    /// for two reasons that are not granularity: it is relative (it needs no
+    /// published list to name, and cannot go stale between publication and
+    /// request), and it is the `Default` a pre-rewind client's payload-free
+    /// frame normalizes to. Both resolve through
+    /// [`GameSession::resolve_action_rewind`], so there is one authority for
+    /// what an action rollback means.
+    Action { sequence: u64 },
     /// Roll back to the start of the numbered turn *of the current game*.
     /// Turn numbers are only unique within a game (see
     /// [`GameSession::observe_transition`]), which is why the rings are
@@ -81,6 +272,41 @@ pub struct RewindOption {
     pub active_player: PlayerId,
 }
 
+/// Rollback availability for one authoritative transition, captured once under
+/// the same lock as the transition itself.
+///
+/// One captured value rather than two independent reads. The turn list and the
+/// per-seat action list describe the same instant and travel in the same
+/// message, and reading them separately is exactly how a `StateUpdate` ends up
+/// carrying a turn list from before `run_ai` and an action list from after it —
+/// the failure the existing capture-site comments in `phase-server` already
+/// warn about for the turn list alone.
+#[derive(Debug, Clone, Default)]
+pub struct RewindPublication {
+    /// Turn boundaries. Identical for every seat, and empty off a
+    /// `HostingMode::SingleUser` sidecar (see [`offers_turn_rewind`]).
+    pub turn_boundaries: Vec<RewindOption>,
+    /// Rollback points per seat, indexed by `PlayerId.0`, each already narrowed
+    /// to that seat's own actions. Narrowed here rather than at the client
+    /// because choosing which rows a viewer may act on is a rule, not
+    /// formatting.
+    per_seat: Vec<Vec<UndoableAction>>,
+}
+
+impl RewindPublication {
+    /// The rollback points `viewer` may select.
+    ///
+    /// A viewer outside the seat range — the spectator pseudo-seat — gets none.
+    /// That is the true answer rather than a special case: a spectator anchors
+    /// no rollback, so there is nothing to offer them.
+    pub fn for_seat(&self, viewer: PlayerId) -> Vec<UndoableAction> {
+        self.per_seat
+            .get(viewer.0 as usize)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
 /// Whether this deployment offers turn-granular rewind.
 ///
 /// A **policy**, not a capability of the mechanism: the machinery below is
@@ -92,6 +318,63 @@ pub struct RewindOption {
 /// it will never offer.
 pub fn offers_turn_rewind(hosting: HostingMode) -> bool {
     hosting == HostingMode::SingleUser
+}
+
+/// Records `entry` in the action ring under the two-tier retention policy.
+///
+/// A free function over the ring for the same reason as
+/// [`record_turn_rewind_point`]: the policy's interesting cases are pure
+/// sequence properties (a routine burst must not evict decisive reach; a full
+/// ring must spend noise before reach) and need no session at all. Callers go
+/// through [`GameSession::push_takeback_state`], which owns sequence assignment.
+///
+/// Two bounds, applied in this order:
+///
+/// 1. **Routine quota.** A routine push first recycles routine slots, so pass
+///    and mana-tap traffic can never grow past [`MAX_ROUTINE_TAKEBACK_ENTRIES`]
+///    no matter how long the priority round runs.
+/// 2. **Ring bound.** Whoever is pushing, an over-full ring gives up its oldest
+///    *routine* entry before it gives up any decisive one, and only falls back
+///    to `pop_front` when there is no noise left to spend.
+///
+/// Eviction from the middle keeps the ring chronological, which is the property
+/// the rest of the module reads it with: retained entries stay in action order,
+/// so a prefix of the ring is still exactly the ancestors of any entry in it
+/// (`history_truncate_len`) and `state.turn_number` stays monotone
+/// (`partition_point`). Only *density* changes — an evicted point stops being
+/// offered, it never becomes mis-ordered.
+pub fn retain_takeback_entry(ring: &mut VecDeque<TakebackEntry>, entry: TakebackEntry) {
+    if entry.significance == RewindSignificance::Routine {
+        // The `&&` is a termination guard, not an optimization: the loop
+        // condition is a count, and only the eviction's own report proves the
+        // count can still go down.
+        while routine_count(ring) >= MAX_ROUTINE_TAKEBACK_ENTRIES && evict_oldest_routine(ring) {}
+    }
+    while ring.len() >= MAX_TAKEBACK_HISTORY {
+        if !evict_oldest_routine(ring) {
+            ring.pop_front();
+        }
+    }
+    ring.push_back(entry);
+}
+
+fn routine_count(ring: &VecDeque<TakebackEntry>) -> usize {
+    ring.iter()
+        .filter(|entry| entry.significance == RewindSignificance::Routine)
+        .count()
+}
+
+/// Drops the oldest routine entry, reporting whether there was one. `false` is
+/// what tells [`retain_takeback_entry`] the ring is all reach and the bound has
+/// to come out of it.
+fn evict_oldest_routine(ring: &mut VecDeque<TakebackEntry>) -> bool {
+    let Some(index) = ring
+        .iter()
+        .position(|entry| entry.significance == RewindSignificance::Routine)
+    else {
+        return false;
+    };
+    ring.remove(index).is_some()
 }
 
 /// Records `state` as a turn-boundary rewind point iff the transition that
@@ -169,6 +452,25 @@ pub struct PendingTakeback {
     /// refuses while a request is pending (`handle_action`,
     /// `handle_interaction`, `handle_match_concede`) and `run_ai` is a no-op.
     pub history_truncate_len: usize,
+    /// What every approver is being asked to give up. Computed once at request
+    /// time from the resolved target — the same reasoning as
+    /// `history_truncate_len` — so the prompt a late-reconnecting approver
+    /// replays describes the same rollback the first broadcast did.
+    pub scope: TakebackScope,
+}
+
+/// One [`RewindTarget`] resolved against the session's retained history.
+///
+/// The three fields a request needs and nothing else: the state to install,
+/// the ancestor prefix of the action ring that survives installing it, and the
+/// action being taken back (`None` for a turn boundary, which is anchored on no
+/// single action). Kept as a named struct rather than a tuple because
+/// `history_truncate_len` and a turn number are both plain integers and the
+/// pair has been transposed before.
+struct ResolvedRewind {
+    target_state: GameState,
+    history_truncate_len: usize,
+    action: Option<&'static str>,
 }
 
 /// Outcome of requesting or responding to a takeback.
@@ -186,24 +488,58 @@ pub enum TakebackOutcome {
 
 impl GameSession {
     /// Records the current authoritative state as a takeback checkpoint,
-    /// tagged with the player about to act. Caps retention at
-    /// [`MAX_TAKEBACK_HISTORY`] (oldest dropped first).
+    /// tagged with the player about to take `action`.
     ///
     /// Tagging by actor (rather than just "most recent action") is what lets
     /// `request_takeback` find *this player's* last action even when other
     /// players have acted since — see its doc comment.
-    pub fn push_takeback_snapshot(&mut self, actor: PlayerId) {
-        self.push_takeback_state(actor, self.state.clone());
+    pub fn push_takeback_snapshot(&mut self, actor: PlayerId, action: &GameAction) {
+        self.push_takeback_state(actor, self.state.clone(), action);
     }
 
     /// Records the pre-action state for an action that has already succeeded.
     /// Keeping the state explicit lets the session apply through the engine
     /// first, so rejected attempts never become undo points.
-    pub fn push_takeback_state(&mut self, actor: PlayerId, state: GameState) {
-        if self.takeback_history.len() >= MAX_TAKEBACK_HISTORY {
-            self.takeback_history.pop_front();
-        }
-        self.takeback_history.push_back((actor, state));
+    ///
+    /// The single assignment point for [`TakebackEntry::sequence`]. Retention
+    /// itself lives in [`retain_takeback_entry`]; this is the `&mut self`
+    /// wrapper that owns the counter, which is deliberately *not* reset with
+    /// the rings at a match's game boundary — a handle a client captured in
+    /// the previous game must miss, never collide.
+    pub fn push_takeback_state(&mut self, actor: PlayerId, state: GameState, action: &GameAction) {
+        self.rewind_sequence = self.rewind_sequence.saturating_add(1);
+        retain_takeback_entry(
+            &mut self.takeback_history,
+            TakebackEntry {
+                sequence: self.rewind_sequence,
+                actor,
+                action: action.variant_name(),
+                significance: RewindSignificance::of(action),
+                state,
+            },
+        );
+    }
+
+    /// The rollback points `player` may currently ask the table to return to,
+    /// oldest first.
+    ///
+    /// Narrowed to `player`'s own actions at the source rather than published
+    /// whole and filtered by the client: the same rule
+    /// [`GameSession::resolve_action_rewind`] enforces on the request, so a row
+    /// this returns is a row that request cannot refuse for ownership.
+    pub fn undoable_actions(&self, player: PlayerId) -> Vec<UndoableAction> {
+        self.takeback_history
+            .iter()
+            .filter(|entry| entry.actor == player)
+            .map(|entry| UndoableAction {
+                sequence: entry.sequence,
+                actor: entry.actor,
+                action: entry.action.to_string(),
+                turn_number: entry.state.turn_number,
+                phase: entry.state.phase,
+                significance: entry.significance,
+            })
+            .collect()
     }
 
     /// The single per-transition rewind bookkeeping authority. Every
@@ -253,6 +589,19 @@ impl GameSession {
                 active_player: state.active_player,
             })
             .collect()
+    }
+
+    /// Everything this session currently offers as a rollback destination,
+    /// captured as one value so the two lists cannot be read at different
+    /// instants. This is what every transport fan-out captures under the
+    /// session lock and threads through its per-seat builders.
+    pub fn rewind_publication(&self) -> RewindPublication {
+        RewindPublication {
+            turn_boundaries: self.rewind_options(),
+            per_seat: (0..self.player_count)
+                .map(|seat| self.undoable_actions(PlayerId(seat)))
+                .collect(),
+        }
     }
 
     /// Human (non-AI) seats in this session, in seat order. AI seats never
@@ -317,10 +666,10 @@ impl GameSession {
     /// the requester is the only human at the table (e.g. solo vs. AI)
     /// since there is nobody else to ask.
     ///
-    /// `target` selects the granularity. `RewindTarget::TurnStart` reaches a
-    /// boundary the action-granular ring structurally cannot: every wire
-    /// `PassPriority` burns a `MAX_TAKEBACK_HISTORY` slot, so a whole turn
-    /// (CR 500.1) never fits inside twelve entries.
+    /// `target` selects the granularity. `RewindTarget::Action` reaches a
+    /// specific earlier action of the requester's; `RewindTarget::TurnStart`
+    /// reaches a boundary the action ring cannot hold at all, since a whole
+    /// turn (CR 500.1) outlives even the reserved decisive tier.
     pub fn request_takeback(
         &mut self,
         player: PlayerId,
@@ -333,17 +682,50 @@ impl GameSession {
         if !self.human_seats().contains(&player) {
             return Err("Only human players may request a takeback".to_string());
         }
-        let (target_state, history_truncate_len) = match target {
+        let resolved = self.resolve_rewind_target(player, target)?;
+
+        let mut approvals = HashSet::new();
+        approvals.insert(player);
+        self.pending_takeback = Some(PendingTakeback {
+            requested_by: player,
+            scope: TakebackScope {
+                turn_number: resolved.target_state.turn_number,
+                phase: resolved.target_state.phase,
+                action: resolved.action.map(str::to_string),
+                discarded_points: self.takeback_history.len() - resolved.history_truncate_len,
+            },
+            target_state: resolved.target_state,
+            approvals,
+            history_truncate_len: resolved.history_truncate_len,
+        });
+
+        Ok(self
+            .try_resolve_pending_takeback()
+            .unwrap_or(TakebackOutcome::Pending))
+    }
+
+    /// The single authority for what a [`RewindTarget`] means. Every selector
+    /// lands here, so the ownership rule, the truncation predicate, and the
+    /// refusal wording cannot drift apart across granularities.
+    fn resolve_rewind_target(
+        &self,
+        player: PlayerId,
+        target: RewindTarget,
+    ) -> Result<ResolvedRewind, String> {
+        match target {
             RewindTarget::LastAction => {
-                let index = self
+                let sequence = self
                     .takeback_history
                     .iter()
-                    .rposition(|(actor, _)| *actor == player)
+                    .rev()
+                    .find(|entry| entry.actor == player)
+                    .map(|entry| entry.sequence)
                     .ok_or_else(|| {
                         "There is no previous action of yours to take back".to_string()
                     })?;
-                (self.takeback_history[index].1.clone(), index)
+                self.resolve_action_rewind(player, sequence)
             }
+            RewindTarget::Action { sequence } => self.resolve_action_rewind(player, sequence),
             RewindTarget::TurnStart { turn_number } => {
                 // Refuse explicitly rather than letting an always-empty ring
                 // produce a "no longer available" miss. This is a system
@@ -364,23 +746,50 @@ impl GameSession {
                 // opening state, and every entry from turn `n` onwards is not.
                 let history_truncate_len = self
                     .takeback_history
-                    .partition_point(|(_, state)| state.turn_number < turn_number);
-                (target_state, history_truncate_len)
+                    .partition_point(|entry| entry.state.turn_number < turn_number);
+                Ok(ResolvedRewind {
+                    target_state,
+                    history_truncate_len,
+                    // A turn boundary is anchored on a transition, not on any
+                    // one player's action, so there is no action to name.
+                    action: None,
+                })
             }
-        };
+        }
+    }
 
-        let mut approvals = HashSet::new();
-        approvals.insert(player);
-        self.pending_takeback = Some(PendingTakeback {
-            requested_by: player,
-            target_state,
-            approvals,
-            history_truncate_len,
-        });
-
-        Ok(self
-            .try_resolve_pending_takeback()
-            .unwrap_or(TakebackOutcome::Pending))
+    /// Resolves one retained action rollback point by its stable sequence.
+    ///
+    /// Shared by `LastAction` and `Action` so the **ownership rule** has one
+    /// site: a player may only anchor a rollback on their *own* action. That is
+    /// what `LastAction` has always meant; stating it here is what stops the
+    /// `Action` selector from generalizing into "propose undoing someone
+    /// else's play", which is a different social contract than the one the
+    /// table agreed to when it approved a takeback.
+    ///
+    /// The index of the entry *is* `history_truncate_len`: entries before it
+    /// are genuine ancestors of the restored state and survive the rollback;
+    /// the entry itself and everything after it belong to the branch being
+    /// discarded.
+    fn resolve_action_rewind(
+        &self,
+        player: PlayerId,
+        sequence: u64,
+    ) -> Result<ResolvedRewind, String> {
+        let index = self
+            .takeback_history
+            .iter()
+            .position(|entry| entry.sequence == sequence)
+            .ok_or_else(|| "That action is no longer available to take back".to_string())?;
+        let entry = &self.takeback_history[index];
+        if entry.actor != player {
+            return Err("You may only take back your own actions".to_string());
+        }
+        Ok(ResolvedRewind {
+            target_state: entry.state.clone(),
+            history_truncate_len: index,
+            action: Some(entry.action),
+        })
     }
 
     /// A human player approves or declines the pending takeback request.
@@ -440,6 +849,7 @@ impl GameSession {
         Some(crate::protocol::ServerMessage::TakebackRequested {
             requester: pending.requested_by,
             requester_name,
+            scope: Some(pending.scope.clone()),
         })
     }
 }
@@ -547,6 +957,157 @@ mod tests {
         assert!(ring.is_empty());
         assert!(!offers_turn_rewind(HostingMode::Shared));
         assert!(offers_turn_rewind(HostingMode::SingleUser));
+    }
+
+    /// Pushes one entry through the real retention policy, classifying it from
+    /// a real `GameAction` so these tests exercise the classifier and the ring
+    /// together rather than a hand-asserted significance.
+    fn push(ring: &mut VecDeque<TakebackEntry>, sequence: u64, action: &GameAction) {
+        retain_takeback_entry(
+            ring,
+            TakebackEntry {
+                sequence,
+                actor: PlayerId(0),
+                action: action.variant_name(),
+                significance: RewindSignificance::of(action),
+                state: GameState::new_two_player(42),
+            },
+        );
+    }
+
+    fn sequences(ring: &VecDeque<TakebackEntry>) -> Vec<u64> {
+        ring.iter().map(|entry| entry.sequence).collect()
+    }
+
+    fn count(ring: &VecDeque<TakebackEntry>, significance: RewindSignificance) -> usize {
+        ring.iter()
+            .filter(|entry| entry.significance == significance)
+            .count()
+    }
+
+    /// A unit-variant decisive action, so these tests need no payload fixtures.
+    const DECISIVE: GameAction = GameAction::CancelCast;
+    const ROUTINE: GameAction = GameAction::PassPriority;
+
+    /// R4. The classifier's two tiers. `PassPriority` and the uncommitted
+    /// payment steps are noise; everything else — including an action the
+    /// classifier has never been told about — keeps its slot.
+    #[test]
+    fn significance_recycles_flow_control_and_retains_everything_else() {
+        assert_eq!(
+            RewindSignificance::of(&GameAction::PassPriority),
+            RewindSignificance::Routine
+        );
+        assert_eq!(
+            RewindSignificance::of(&GameAction::BackToManaPayment),
+            RewindSignificance::Routine
+        );
+        assert_eq!(
+            RewindSignificance::of(&GameAction::CancelAutoPass),
+            RewindSignificance::Routine
+        );
+        assert_eq!(
+            RewindSignificance::of(&GameAction::CancelCast),
+            RewindSignificance::Decisive
+        );
+        assert_eq!(
+            RewindSignificance::of(&GameAction::CompanionToHand),
+            RewindSignificance::Decisive
+        );
+    }
+
+    /// R5. **The reason the tier split exists.** An unbounded burst of priority
+    /// passes must not cost a single decisive rollback point. Without the
+    /// reserve this leaves twelve `PassPriority` entries and the eight casts
+    /// are unreachable — which is the reach failure the feature is about.
+    #[test]
+    fn routine_traffic_cannot_evict_decisive_reach() {
+        let mut ring = VecDeque::new();
+        for sequence in 1..=8 {
+            push(&mut ring, sequence, &DECISIVE);
+        }
+        for sequence in 100..120 {
+            push(&mut ring, sequence, &ROUTINE);
+        }
+        assert_eq!(count(&ring, RewindSignificance::Decisive), 8);
+        assert_eq!(
+            count(&ring, RewindSignificance::Routine),
+            MAX_ROUTINE_TAKEBACK_ENTRIES
+        );
+        assert_eq!(ring.len(), 8 + MAX_ROUTINE_TAKEBACK_ENTRIES);
+        assert_eq!(
+            sequences(&ring)[..8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            "every decisive rollback point must survive the burst intact"
+        );
+    }
+
+    /// R6. Routine entries recycle their own quota, keeping the newest — a
+    /// mis-tap is only ever wanted back while it is still recent.
+    #[test]
+    fn routine_entries_recycle_their_quota_newest_first() {
+        let mut ring = VecDeque::new();
+        for sequence in 1..=6 {
+            push(&mut ring, sequence, &ROUTINE);
+        }
+        assert_eq!(ring.len(), MAX_ROUTINE_TAKEBACK_ENTRIES);
+        assert_eq!(sequences(&ring), vec![3, 4, 5, 6]);
+    }
+
+    /// R7. A ring with no noise left to spend still honours the hard bound, and
+    /// spends it from the FRONT. Asserting both ends fails a `pop_back`
+    /// inversion.
+    #[test]
+    fn a_ring_of_pure_reach_drops_its_oldest() {
+        let mut ring = VecDeque::new();
+        let overflow = MAX_TAKEBACK_HISTORY as u64 + 1;
+        for sequence in 1..=overflow {
+            push(&mut ring, sequence, &DECISIVE);
+        }
+        assert_eq!(ring.len(), MAX_TAKEBACK_HISTORY);
+        assert_eq!(ring.front().expect("bounded ring").sequence, 2);
+        assert_eq!(ring.back().expect("bounded ring").sequence, overflow);
+    }
+
+    /// R8. When the bound has to give, noise pays before reach — even though
+    /// the noise here is NEWER than the decisive entries it protects. A
+    /// plain `pop_front` would drop decisive entry 5 instead.
+    #[test]
+    fn a_full_ring_spends_noise_before_reach() {
+        let mut ring = VecDeque::new();
+        for sequence in 1..=4 {
+            push(&mut ring, sequence, &ROUTINE);
+        }
+        for sequence in 5..=12 {
+            push(&mut ring, sequence, &DECISIVE);
+        }
+        assert_eq!(ring.len(), MAX_TAKEBACK_HISTORY);
+
+        push(&mut ring, 13, &DECISIVE);
+        assert_eq!(ring.len(), MAX_TAKEBACK_HISTORY);
+        assert_eq!(
+            sequences(&ring),
+            vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+            "the OLDEST routine entry paid for the new decisive one"
+        );
+    }
+
+    /// R9. Eviction from the middle must leave the ring chronological — the
+    /// property `history_truncate_len` (prefix = ancestors) and
+    /// `partition_point` (monotone turn numbers) both read it with.
+    #[test]
+    fn retention_leaves_the_ring_in_action_order() {
+        let mut ring = VecDeque::new();
+        for sequence in 1..=40 {
+            let action = if sequence % 3 == 0 { ROUTINE } else { DECISIVE };
+            push(&mut ring, sequence, &action);
+        }
+        assert_eq!(ring.len(), MAX_TAKEBACK_HISTORY);
+        assert!(
+            sequences(&ring).windows(2).all(|pair| pair[0] < pair[1]),
+            "retained entries must stay strictly ordered: {:?}",
+            sequences(&ring)
+        );
     }
 
     /// R3. The ring is bounded and drops the OLDEST entry. Asserting both ends

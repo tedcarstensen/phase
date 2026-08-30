@@ -75,6 +75,7 @@ pub use spectator_wire_guard::{
     guard_spectator_join, MAX_DRAFT_SPECTATORS_PER_DRAFT, MAX_GAME_SPECTATORS_PER_GAME,
 };
 pub use takeback::{
-    PendingTakeback, RewindOption, RewindTarget, TakebackOutcome, MAX_TAKEBACK_HISTORY,
-    MAX_TURN_REWIND_HISTORY,
+    PendingTakeback, RewindOption, RewindPublication, RewindSignificance, RewindTarget,
+    TakebackEntry, TakebackOutcome, TakebackScope, UndoableAction, MAX_ROUTINE_TAKEBACK_ENTRIES,
+    MAX_TAKEBACK_HISTORY, MAX_TURN_REWIND_HISTORY,
 };
