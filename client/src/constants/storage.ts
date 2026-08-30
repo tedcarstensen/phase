@@ -2,12 +2,32 @@ import { isCommanderBracket, type CommanderBracket } from "../types/bracket";
 import type { FeedSubscription } from "../types/feed";
 import { repairParsedDeck, type ParsedDeck } from "../services/deckParser";
 import { projectSavedDeckSpecialSlots } from "../services/savedDeckProjection";
+import { profileStorage } from "../services/profileStorage";
+import {
+  ACTIVE_DECK_KEY,
+  DECK_FOLDERS_KEY,
+  DECK_METADATA_KEY,
+  FEED_DECK_ORIGINS_KEY,
+  FEED_SUBSCRIPTIONS_KEY,
+  STORAGE_KEY_PREFIX,
+} from "./profileKeys";
 
-/** Prefix for saved deck data in localStorage. Full key: `${STORAGE_KEY_PREFIX}${deckName}` */
-export const STORAGE_KEY_PREFIX = "phase-deck:";
-
-/** Key for the currently selected/active deck name in localStorage */
-export const ACTIVE_DECK_KEY = "phase-active-deck";
+/**
+ * The portable-profile key vocabulary lives in `./profileKeys` (a leaf module
+ * the durable profile store can import without pulling in the deck parser).
+ * Re-exported here so every existing `constants/storage` import keeps working.
+ */
+export {
+  ACTIVE_DECK_KEY,
+  DECK_FOLDERS_KEY,
+  DECK_METADATA_KEY,
+  DRAFT_WORKSPACE_PREFERENCES_KEY,
+  FEED_DECK_ORIGINS_KEY,
+  FEED_SUBSCRIPTIONS_KEY,
+  isUserOwnedStorageKey,
+  PREFERENCES_KEY,
+  STORAGE_KEY_PREFIX,
+} from "./profileKeys";
 
 /** Sentinel stored as the active deck when setup should randomize at game start. */
 export const RANDOM_DECK_SELECTION = "__phase_random_deck__";
@@ -25,11 +45,6 @@ export const GAME_CHECKPOINTS_PREFIX = "phase-game-checkpoints:";
 /** Key for the active game metadata (id, mode, difficulty) */
 export const ACTIVE_GAME_KEY = "phase-active-game";
 
-/** Key for deck metadata (timestamps, source tracking, folder/star) */
-export const DECK_METADATA_KEY = "phase-deck-metadata";
-
-/** Key for the user's deck-folder registry (an array of {@link DeckFolder}). */
-export const DECK_FOLDERS_KEY = "phase-deck-folders";
 
 /** Window event fired when folder/star/membership state changes, so views
  * (library, builder switcher) can re-read without prop-drilling. Decks
@@ -39,11 +54,6 @@ export const DECKS_CHANGED_EVENT = "phase-decks-changed";
 /** Max length for a folder name; longer input is trimmed on create/rename. */
 export const MAX_FOLDER_NAME_LENGTH = 40;
 
-/** Key for the list of subscribed feeds */
-export const FEED_SUBSCRIPTIONS_KEY = "phase-feed-subscriptions";
-
-/** Key for mapping deck names to their originating feed ID */
-export const FEED_DECK_ORIGINS_KEY = "phase-feed-deck-origins";
 
 /** Flag to short-circuit async feed init on subsequent loads */
 export const FEEDS_INITIALIZED_KEY = "phase-feeds-initialized";
@@ -67,34 +77,6 @@ export const QUICK_DRAFT_KEY_PREFIX = "phase-quick-draft:";
 /** Prefix for draft run state in IndexedDB. Full key: `${DRAFT_RUN_KEY_PREFIX}${draftId}` */
 export const DRAFT_RUN_KEY_PREFIX = "phase-draft-run:";
 
-/** localStorage key for the Zustand-persisted preferences store. */
-export const PREFERENCES_KEY = "phase-preferences";
-
-/** localStorage key for personal draft workspace preferences. */
-export const DRAFT_WORKSPACE_PREFERENCES_KEY = "phase-draft-workspace-preferences";
-
-/**
- * Single authority for "is this localStorage key part of the user's portable
- * profile?" — the decks, preferences, metadata, active-deck pointer, and feed
- * state that `buildBackup`/`applyBackup` round-trip and that cloud sync mirrors.
- *
- * Deliberately excludes transient/rehydratable keys (per-game state, draft
- * blobs, IndexedDB caches): those regenerate at runtime and must NOT trigger a
- * cloud push. Consumed by `backup.ts` (export/import) and the cloud-sync
- * storage watcher so all three share one definition and cannot drift.
- */
-export function isUserOwnedStorageKey(key: string): boolean {
-  return (
-    key === PREFERENCES_KEY ||
-    key === DRAFT_WORKSPACE_PREFERENCES_KEY ||
-    key === DECK_METADATA_KEY ||
-    key === DECK_FOLDERS_KEY ||
-    key === ACTIVE_DECK_KEY ||
-    key === FEED_SUBSCRIPTIONS_KEY ||
-    key === FEED_DECK_ORIGINS_KEY ||
-    key.startsWith(STORAGE_KEY_PREFIX)
-  );
-}
 
 export interface DeckMeta {
   addedAt: number;
@@ -130,7 +112,7 @@ function notifyDecksChanged(): void {
 
 function loadMetadataStore(): Record<string, DeckMeta> {
   try {
-    const raw = localStorage.getItem(DECK_METADATA_KEY);
+    const raw = profileStorage.getItem(DECK_METADATA_KEY);
     return raw ? (JSON.parse(raw) as Record<string, DeckMeta>) : {};
   } catch {
     return {};
@@ -138,7 +120,7 @@ function loadMetadataStore(): Record<string, DeckMeta> {
 }
 
 function saveMetadataStore(store: Record<string, DeckMeta>): void {
-  localStorage.setItem(DECK_METADATA_KEY, JSON.stringify(store));
+  profileStorage.setItem(DECK_METADATA_KEY, JSON.stringify(store));
 }
 
 /** Stamp metadata for a deck. Call whenever a deck is saved or seeded. */
@@ -218,32 +200,29 @@ export function removeDeckMeta(deckName: string): void {
   saveMetadataStore(store);
 }
 
-/** Delete a saved deck from localStorage, clearing metadata and active-deck if needed. */
+/** Delete a saved deck, clearing metadata and active-deck if needed. */
 export function deleteDeck(deckName: string): void {
-  localStorage.removeItem(STORAGE_KEY_PREFIX + deckName);
+  profileStorage.removeItem(STORAGE_KEY_PREFIX + deckName);
   removeDeckMeta(deckName);
-  if (localStorage.getItem(ACTIVE_DECK_KEY) === deckName) {
-    localStorage.removeItem(ACTIVE_DECK_KEY);
+  if (profileStorage.getItem(ACTIVE_DECK_KEY) === deckName) {
+    profileStorage.removeItem(ACTIVE_DECK_KEY);
   }
 }
 
-/** List all saved deck names from localStorage, sorted alphabetically. */
+/** List all saved deck names, sorted alphabetically. */
 export function listSavedDeckNames(): string[] {
-  const names: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith(STORAGE_KEY_PREFIX)) {
-      names.push(key.slice(STORAGE_KEY_PREFIX.length));
-    }
-  }
-  return names.sort();
+  return profileStorage
+    .keys()
+    .filter((key) => key.startsWith(STORAGE_KEY_PREFIX))
+    .map((key) => key.slice(STORAGE_KEY_PREFIX.length))
+    .sort();
 }
 
 // --- Folder registry helpers ---
 
 function loadFolderStore(): DeckFolder[] {
   try {
-    const raw = localStorage.getItem(DECK_FOLDERS_KEY);
+    const raw = profileStorage.getItem(DECK_FOLDERS_KEY);
     return raw ? (JSON.parse(raw) as DeckFolder[]) : [];
   } catch {
     return [];
@@ -251,7 +230,7 @@ function loadFolderStore(): DeckFolder[] {
 }
 
 function saveFolderStore(folders: DeckFolder[]): void {
-  localStorage.setItem(DECK_FOLDERS_KEY, JSON.stringify(folders));
+  profileStorage.setItem(DECK_FOLDERS_KEY, JSON.stringify(folders));
   notifyDecksChanged();
 }
 
@@ -311,7 +290,7 @@ export function deleteFolder(id: string): void {
 /**
  * Read a saved deck and return its repaired in-memory form.
  *
- * Pure read: never writes to localStorage. The repair-on-disk concern is
+ * Pure read: never writes to the profile store. The repair-on-disk concern is
  * owned by the one-shot `migrateSavedDecks()` boot migration — doing the
  * write here used to fire during JSX render (`DeckTile` calls this), which
  * is a React-rule violation AND ping-pongs cloud sync between tabs. Repairs
@@ -320,7 +299,7 @@ export function deleteFolder(id: string): void {
  */
 export function loadSavedDeck(deckName: string): ParsedDeck | null {
   if (isRandomDeckSelection(deckName)) return null;
-  const raw = localStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as ParsedDeck & Record<string, unknown>;
@@ -333,7 +312,7 @@ export function loadSavedDeck(deckName: string): ParsedDeck | null {
 /** Read the persisted deck-construction format without projecting deck data. */
 export function loadSavedDeckFormat(deckName: string): string | undefined {
   if (isRandomDeckSelection(deckName)) return undefined;
-  const raw = localStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
   if (!raw) return undefined;
   try {
     const parsed = JSON.parse(raw) as { format?: unknown };
@@ -352,7 +331,7 @@ export function loadSavedDeckFormat(deckName: string): string | undefined {
  */
 export function loadSavedDeckBracket(deckName: string): CommanderBracket | null {
   if (isRandomDeckSelection(deckName)) return null;
-  const raw = localStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as { bracket?: unknown };
@@ -368,7 +347,7 @@ export function loadSavedDeckBracket(deckName: string): CommanderBracket | null 
  * the deck builder is responsible for the initial save before tagging.
  */
 export function saveSavedDeckBracket(deckName: string, bracket: CommanderBracket | null): void {
-  const raw = localStorage.getItem(STORAGE_KEY_PREFIX + deckName);
+  const raw = profileStorage.getItem(STORAGE_KEY_PREFIX + deckName);
   if (!raw) return;
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -377,15 +356,15 @@ export function saveSavedDeckBracket(deckName: string, bracket: CommanderBracket
     } else {
       parsed.bracket = bracket;
     }
-    localStorage.setItem(STORAGE_KEY_PREFIX + deckName, JSON.stringify(parsed));
+    profileStorage.setItem(STORAGE_KEY_PREFIX + deckName, JSON.stringify(parsed));
   } catch {
     // Corrupt JSON: leave it alone. The deck builder will overwrite on save.
   }
 }
 
-/** Load the currently active deck from localStorage. */
+/** Load the currently active deck. */
 export function loadActiveDeck(): ParsedDeck | null {
-  const activeName = localStorage.getItem(ACTIVE_DECK_KEY);
+  const activeName = profileStorage.getItem(ACTIVE_DECK_KEY);
   if (!activeName) return null;
   return loadSavedDeck(activeName);
 }
@@ -394,7 +373,7 @@ export function loadActiveDeck(): ParsedDeck | null {
 
 export function loadFeedSubscriptions(): FeedSubscription[] {
   try {
-    const raw = localStorage.getItem(FEED_SUBSCRIPTIONS_KEY);
+    const raw = profileStorage.getItem(FEED_SUBSCRIPTIONS_KEY);
     return raw ? (JSON.parse(raw) as FeedSubscription[]) : [];
   } catch {
     return [];
@@ -402,12 +381,12 @@ export function loadFeedSubscriptions(): FeedSubscription[] {
 }
 
 export function saveFeedSubscriptions(subs: FeedSubscription[]): void {
-  localStorage.setItem(FEED_SUBSCRIPTIONS_KEY, JSON.stringify(subs));
+  profileStorage.setItem(FEED_SUBSCRIPTIONS_KEY, JSON.stringify(subs));
 }
 
 export function loadDeckOrigins(): Record<string, string> {
   try {
-    const raw = localStorage.getItem(FEED_DECK_ORIGINS_KEY);
+    const raw = profileStorage.getItem(FEED_DECK_ORIGINS_KEY);
     return raw ? (JSON.parse(raw) as Record<string, string>) : {};
   } catch {
     return {};
@@ -415,5 +394,5 @@ export function loadDeckOrigins(): Record<string, string> {
 }
 
 export function saveDeckOrigins(origins: Record<string, string>): void {
-  localStorage.setItem(FEED_DECK_ORIGINS_KEY, JSON.stringify(origins));
+  profileStorage.setItem(FEED_DECK_ORIGINS_KEY, JSON.stringify(origins));
 }

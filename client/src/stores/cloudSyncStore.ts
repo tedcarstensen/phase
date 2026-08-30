@@ -165,11 +165,16 @@ export const useCloudSyncStore = create<CloudSyncState>()(
         }
 
         // Mark dirty + debounce a push whenever user-owned storage changes.
+        // Only this tab's own writes count: a `remote` change came from a peer
+        // tab of the same origin, which is already scheduling its own push, so
+        // treating it as dirty here would have both tabs racing to publish
+        // identical bytes.
         // Deferred to a microtask so writes that happen inside a React render
         // commit (legacy code paths) don't trigger the "Cannot update a
         // component while rendering" warning. The microtask drains at the
         // end of the current task, before the next paint or user input.
-        const uninstallWatcher = watchUserStorage(() => {
+        const uninstallWatcher = watchUserStorage((_key, origin) => {
+          if (origin !== "local") return;
           queueMicrotask(() => {
             set({ dirty: true });
             if (!get().identity) return;

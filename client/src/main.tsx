@@ -18,14 +18,26 @@ import { registerTauriUpdater } from "./pwa/tauriUpdater";
 import { installChunkReloadHandler } from "./pwa/chunkReloadHandler";
 import { installTauriExternalLinkHandler } from "./services/externalLinks";
 import { importLegacyStorage, markRemoteLoadOk } from "./services/legacyMigration";
+import {
+  hydrateProfileStorage,
+  installProfileFlushHandlers,
+} from "./services/profileStorage";
 import { installTelemetry } from "./services/telemetryEvents";
 import { initializeHostPlatform } from "./services/platform";
 
 export async function bootstrap(): Promise<void> {
   await initializeHostPlatform();
 
+  // The user's decks, deck organization, preferences, and feed subscriptions
+  // live in IndexedDB behind a synchronous in-memory mirror. Nothing may read
+  // the profile before that mirror is filled — component render paths and
+  // Zustand rehydration both read it synchronously — so this gates the mount.
+  // It also runs the one-time localStorage→IndexedDB migration.
+  await hydrateProfileStorage();
+  installProfileFlushHandlers();
+
   // Cloud-sync restores its Supabase session from an App effect, so migration
-  // must finish before React mounts and that effect can observe localStorage.
+  // must finish before React mounts and that effect can observe the profile.
   await importLegacyStorage();
 
   // StrictMode is scoped inside App.tsx instead of wrapping the root. P2P game

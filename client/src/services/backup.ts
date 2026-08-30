@@ -1,5 +1,5 @@
 /**
- * Export/import of user-owned localStorage data so a player can migrate
+ * Export/import of the user's portable profile so a player can migrate
  * preferences + decks + feed subscriptions between machines.
  *
  * Design note — each field is a raw JSON string (or null) rather than a
@@ -7,11 +7,12 @@
  * round-trips the exact on-disk representation. This avoids coupling the
  * backup format to internal store shapes (which evolve independently) and
  * lets each store's own versioning machinery handle forward migration when
- * the restored data lands in localStorage.
+ * the restored data lands back in the profile store.
  *
  * IndexedDB caches (feed cache, audio cache, game state checkpoints) are
  * intentionally NOT exported — they rehydrate at runtime from source.
  */
+import { profileStorage } from "./profileStorage";
 import {
   ACTIVE_DECK_KEY,
   DECK_FOLDERS_KEY,
@@ -226,28 +227,26 @@ function mergeDeckRecord<T>(
   return JSON.stringify(local);
 }
 
-/** Build a backup envelope by snapshotting all user-owned localStorage keys. */
+/** Build a backup envelope by snapshotting the whole portable profile. */
 export function buildBackup(): PhaseBackupV1 {
   const decks: Record<string, string> = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key?.startsWith(STORAGE_KEY_PREFIX)) continue;
-    const name = key.slice(STORAGE_KEY_PREFIX.length);
-    const raw = localStorage.getItem(key);
-    if (raw != null) decks[name] = raw;
+  for (const key of profileStorage.keys()) {
+    if (!key.startsWith(STORAGE_KEY_PREFIX)) continue;
+    const raw = profileStorage.getItem(key);
+    if (raw != null) decks[key.slice(STORAGE_KEY_PREFIX.length)] = raw;
   }
 
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
-    preferences: localStorage.getItem(PREFERENCES_KEY),
-    draftWorkspacePreferences: localStorage.getItem(DRAFT_WORKSPACE_PREFERENCES_KEY),
+    preferences: profileStorage.getItem(PREFERENCES_KEY),
+    draftWorkspacePreferences: profileStorage.getItem(DRAFT_WORKSPACE_PREFERENCES_KEY),
     decks,
-    deckMetadata: localStorage.getItem(DECK_METADATA_KEY),
-    deckFolders: localStorage.getItem(DECK_FOLDERS_KEY),
-    activeDeck: localStorage.getItem(ACTIVE_DECK_KEY),
-    feedSubscriptions: localStorage.getItem(FEED_SUBSCRIPTIONS_KEY),
-    feedDeckOrigins: localStorage.getItem(FEED_DECK_ORIGINS_KEY),
+    deckMetadata: profileStorage.getItem(DECK_METADATA_KEY),
+    deckFolders: profileStorage.getItem(DECK_FOLDERS_KEY),
+    activeDeck: profileStorage.getItem(ACTIVE_DECK_KEY),
+    feedSubscriptions: profileStorage.getItem(FEED_SUBSCRIPTIONS_KEY),
+    feedDeckOrigins: profileStorage.getItem(FEED_DECK_ORIGINS_KEY),
   };
 }
 
@@ -306,7 +305,7 @@ export interface ImportResult {
 
 /**
  * Reject inner payloads that aren't parseable JSON. Each store (Zustand,
- * custom JSON) rehydrates from localStorage on next boot — a truncated or
+ * custom JSON) rehydrates from the profile store on next boot — a truncated or
  * otherwise corrupt inner payload would crash rehydration. Catching it
  * here keeps a bad backup from poisoning the app.
  */
@@ -321,27 +320,24 @@ function isParseableJson(raw: string | null): boolean {
 }
 
 /**
- * Apply a backup envelope to localStorage. In `overwrite` mode, clears all
- * user-owned keys before writing; in `merge` mode, leaves existing decks
+ * Apply a backup envelope to the profile store. In `overwrite` mode, clears
+ * all user-owned keys before writing; in `merge` mode, leaves existing decks
  * alone (backup decks with the same name are ignored to avoid surprise
  * replacement). Preferences, metadata, and feed state are always replaced
  * when present in the backup — there is no meaningful merge for a
  * serialized Zustand snapshot.
  *
- * After applying, callers should trigger a full reload so Zustand stores
- * re-hydrate from the new localStorage contents.
+ * After applying, callers should rehydrate the Zustand stores whose persisted
+ * slices live in the envelope so they pick up the new contents.
  */
 export function applyBackup(
   backup: PhaseBackupV1,
   mode: ImportMode,
 ): ImportResult {
   if (mode === "overwrite") {
-    const toRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && isUserOwnedStorageKey(key)) toRemove.push(key);
+    for (const key of profileStorage.keys()) {
+      if (isUserOwnedStorageKey(key)) profileStorage.removeItem(key);
     }
-    for (const key of toRemove) localStorage.removeItem(key);
   }
 
   let decksImported = 0;
@@ -349,13 +345,13 @@ export function applyBackup(
   const malformedKeys: string[] = [];
   for (const [name, raw] of Object.entries(backup.decks)) {
     const storageKey = STORAGE_KEY_PREFIX + name;
-    if (mode === "merge" && localStorage.getItem(storageKey) != null) continue;
+    if (mode === "merge" && profileStorage.getItem(storageKey) != null) continue;
     if (!isParseableJson(raw)) {
       decksSkippedMalformed += 1;
       malformedKeys.push(storageKey);
       continue;
     }
-    localStorage.setItem(storageKey, raw);
+    profileStorage.setItem(storageKey, raw);
     decksImported += 1;
   }
 
@@ -372,7 +368,7 @@ export function applyBackup(
       malformedKeys.push(key);
       return false;
     }
-    localStorage.setItem(key, raw);
+    profileStorage.setItem(key, raw);
     return true;
   };
 

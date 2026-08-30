@@ -1,59 +1,46 @@
-import { isUserOwnedStorageKey } from "../../constants/storage";
+import { isUserOwnedStorageKey } from "../../constants/profileKeys";
+import { profileStorage, type ProfileChange, type ProfileChangeOrigin } from "../profileStorage";
 
 /**
- * Single chokepoint for "the user's portable profile changed in this tab".
+ * Single chokepoint for "the user's portable profile changed".
  *
  * Writes to user-owned keys are scattered across ~9 call sites (deck builder,
  * feed service, import modal, game setup, precon loader) plus the Zustand
- * `persist` middleware for preferences — and every one of them ultimately calls
- * `localStorage.setItem`/`removeItem`. The same-tab `storage` event does NOT
- * fire for a tab's own writes, so we wrap those two methods once at boot and
- * notify on any user-owned-key change. This is the DRY, can't-miss-a-site
- * alternative to sprinkling markDirty() through every save path, and it
- * automatically excludes game state, draft blobs, and caches (their keys are
- * not user-owned per `isUserOwnedStorageKey`).
+ * `persist` middleware for preferences. Rather than sprinkle markDirty()
+ * through every save path, we observe the one store they all write to:
+ * `profileStorage` notifies on every `setItem`/`removeItem`, which is the
+ * DRY, can't-miss-a-site alternative. It automatically excludes game state,
+ * draft blobs, and caches — those live in their own IndexedDB stores and
+ * never enter the profile store at all. The extra `isUserOwnedStorageKey`
+ * filter keeps that guarantee explicit rather than implied.
  *
- * IMPORTANT: we patch `Storage.prototype`, NOT the `localStorage` instance.
- * Storage objects have legacy named-property setter semantics: assigning
- * `localStorage.foo = x` is spec-defined to call `setItem("foo", String(x))`,
- * which means the natural-looking `localStorage.setItem = wrapper` silently
- * stores the stringified function under the key "setItem" and the real
- * `Storage.prototype.setItem` is never replaced — writes keep flowing through
- * the unwrapped method. Firefox has always enforced this; modern Chromium
- * does too. Patching the prototype (a regular object, exempt from NamedItem
- * semantics) is the only path that actually intercepts. The
- * `this === localStorage` guard keeps sessionStorage writes uninstrumented.
+ * Subscribers receive the change's `origin` and decide for themselves what to
+ * do with it. `local` is this tab's own write; `remote` is a peer tab of the
+ * same origin, replicated through the profile store because IndexedDB has no
+ * equivalent of the `storage` event. The two mean different things to
+ * different consumers — cloud sync must not treat a peer's write as this
+ * device's unpushed change, while the deck-library pack must reconcile for
+ * both — so the policy belongs at each subscriber, not here.
  *
- * Subscribers share one prototype wrapper, but each registration has its own
- * lifetime. Returns an idempotent uninstaller for this registration.
+ * Subscribers share one profile-store subscription, but each registration has
+ * its own lifetime. Returns an idempotent uninstaller for this registration.
  */
+type UserStorageListener = (key: string, origin: ProfileChangeOrigin) => void;
+
 interface StorageWatcherRegistration {
-  onDirty: (key: string) => void;
+  onDirty: UserStorageListener;
 }
 
 const registrations = new Set<StorageWatcherRegistration>();
-let originalSetItem: typeof Storage.prototype.setItem | null = null;
-let originalRemoveItem: typeof Storage.prototype.removeItem | null = null;
+let unsubscribeProfile: (() => void) | null = null;
 let suppressionDepth = 0;
 
-export function watchUserStorage(onDirty: (key: string) => void): () => void {
+export function watchUserStorage(onDirty: UserStorageListener): () => void {
   const registration = { onDirty };
   registrations.add(registration);
 
   if (registrations.size === 1) {
-    const nativeSetItem = Storage.prototype.setItem;
-    const nativeRemoveItem = Storage.prototype.removeItem;
-    originalSetItem = nativeSetItem;
-    originalRemoveItem = nativeRemoveItem;
-
-    Storage.prototype.setItem = function (this: Storage, key: string, value: string) {
-      nativeSetItem.call(this, key, value);
-      notifyUserStorageWrite(this, key);
-    };
-    Storage.prototype.removeItem = function (this: Storage, key: string) {
-      nativeRemoveItem.call(this, key);
-      notifyUserStorageWrite(this, key);
-    };
+    unsubscribeProfile = profileStorage.subscribe(notifyUserStorageWrite);
   }
 
   let unsubscribed = false;
@@ -63,31 +50,24 @@ export function watchUserStorage(onDirty: (key: string) => void): () => void {
     registrations.delete(registration);
     if (registrations.size > 0) return;
 
-    Storage.prototype.setItem = originalSetItem!;
-    Storage.prototype.removeItem = originalRemoveItem!;
-    originalSetItem = null;
-    originalRemoveItem = null;
+    unsubscribeProfile?.();
+    unsubscribeProfile = null;
   };
 }
 
-function notifyUserStorageWrite(storage: Storage, key: string): void {
-  if (
-    storage !== localStorage ||
-    suppressionDepth > 0 ||
-    !isUserOwnedStorageKey(key)
-  ) {
-    return;
-  }
+function notifyUserStorageWrite({ key, origin }: ProfileChange): void {
+  if (suppressionDepth > 0 || !isUserOwnedStorageKey(key)) return;
 
   registrations.forEach(({ onDirty }) => {
-    onDirty(key);
+    onDirty(key, origin);
   });
 }
 
 /**
  * Suppress dirty notifications while applying a remote snapshot — `applyBackup`
  * writes the user-owned keys, which would otherwise re-mark the profile dirty
- * and schedule a redundant push of data we just pulled.
+ * and schedule a redundant push of data we just pulled. Depth-counted so a
+ * nested scope cannot un-suppress its caller.
  */
 export function withStorageWatchSuppressed(fn: () => void): void {
   suppressionDepth += 1;
