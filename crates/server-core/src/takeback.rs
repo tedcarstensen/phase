@@ -506,6 +506,13 @@ impl GameSession {
     /// wrapper that owns the counter, which is deliberately *not* reset with
     /// the rings at a match's game boundary — a handle a client captured in
     /// the previous game must miss, never collide.
+    ///
+    /// Numbering *is* session-runtime scoped, so a restored session starts
+    /// over at 1. That matches the ring, which `from_persisted` also restores
+    /// empty: the only rows a client can select are the ones the current
+    /// publication offers, and immediately after a restore that publication is
+    /// empty. A handle captured before the restart is therefore replaced
+    /// before the counter can climb back to it.
     pub fn push_takeback_state(&mut self, actor: PlayerId, state: GameState, action: &GameAction) {
         self.rewind_sequence = self.rewind_sequence.saturating_add(1);
         retain_takeback_entry(
