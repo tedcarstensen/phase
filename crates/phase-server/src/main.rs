@@ -2350,7 +2350,8 @@ async fn serve() {
     // precedence over the bundle and its SPA fallback.
     if let Some(static_dir) = cli.static_dir.as_deref() {
         info!(dir = %static_dir.display(), "serving the web client from this process");
-        app = static_assets::mount(app, static_dir, &cli.data_dir, get(ws_handler));
+        app = static_assets::mount(app, static_dir, &cli.data_dir, get(ws_handler))
+            .unwrap_or_else(|message| fatal_startup(message));
     }
 
     let app_state = AppState {

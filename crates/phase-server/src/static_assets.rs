@@ -63,26 +63,25 @@ const ACCEPT_ENCODING: &str = "accept-encoding";
 /// `websocket` is the same route as `/ws`; it is reached from the fallback so a
 /// handshake on any other path is answered rather than mistaken for a page load.
 ///
-/// # Panics
-///
-/// If `static_dir` has no `index.html`. A directory that cannot answer the entry
-/// point serves nothing but 404s, and silently doing so is the exact class of
-/// confusing failure this module exists to remove.
+/// Errors when `static_dir` has no `index.html`: a directory that cannot answer
+/// the entry point serves nothing but 404s, and starting up anyway is the exact
+/// class of confusing failure this module exists to remove.
 pub(crate) fn mount<S>(
     router: Router<S>,
     static_dir: &Path,
     data_dir: &Path,
     websocket: MethodRouter<S>,
-) -> Router<S>
+) -> Result<Router<S>, String>
 where
     S: Clone + Send + Sync + 'static,
 {
     let index = static_dir.join("index.html");
-    assert!(
-        index.is_file(),
-        "--static-dir {} has no index.html; point it at the built client (client/dist)",
-        static_dir.display()
-    );
+    if !index.is_file() {
+        return Err(format!(
+            "--static-dir {} has no index.html; point it at the built client (client/dist)",
+            static_dir.display()
+        ));
+    }
 
     // Hashed bundle output. `precompressed_br` serves the `.br` sibling that
     // `vite-plugin-compression2` emits next to every JS/CSS/HTML asset, so the
@@ -122,25 +121,27 @@ where
         );
     }
 
-    router.fallback(move |State(state): State<S>, request: Request| {
-        let bundle = bundle.clone();
-        let websocket = websocket.clone();
-        async move {
-            if is_websocket_upgrade(request.headers()) {
-                return websocket
-                    .with_state(state)
-                    .oneshot(request)
-                    .await
-                    .into_response();
+    Ok(
+        router.fallback(move |State(state): State<S>, request: Request| {
+            let bundle = bundle.clone();
+            let websocket = websocket.clone();
+            async move {
+                if is_websocket_upgrade(request.headers()) {
+                    return websocket
+                        .with_state(state)
+                        .oneshot(request)
+                        .await
+                        .into_response();
+                }
+                match bundle.oneshot(request).await {
+                    Ok(response) => response.into_response(),
+                    // `ServeDir`'s error type is `Infallible` once it has a
+                    // fallback; this arm is uninhabited.
+                    Err(never) => match never {},
+                }
             }
-            match bundle.oneshot(request).await {
-                Ok(response) => response.into_response(),
-                // `ServeDir`'s error type is `Infallible` once it has a
-                // fallback; this arm is uninhabited.
-                Err(never) => match never {},
-            }
-        }
-    })
+        }),
+    )
 }
 
 /// Overriding rather than appending: `ServeDir` already sets no `Cache-Control`,
@@ -203,7 +204,9 @@ mod tests {
         let app = Router::new()
             .route("/health", get(|| async { "ok" }))
             .route("/ws", get(accept));
-        let app = mount(app, static_dir, data_dir, get(accept)).with_state(());
+        let app = mount(app, static_dir, data_dir, get(accept))
+            .expect("fixture dist has an index.html")
+            .with_state(());
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
