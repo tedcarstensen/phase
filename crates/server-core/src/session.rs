@@ -3368,32 +3368,38 @@ mod tests {
 
     // ── Takeback tests (GH #1507) ────────────────────────────────────────
 
-    use crate::takeback::{RewindOption, RewindTarget, TakebackOutcome, MAX_TAKEBACK_HISTORY};
+    use crate::takeback::{
+        RewindOption, RewindTarget, TakebackOutcome, MAX_ROUTINE_TAKEBACK_ENTRIES,
+    };
 
-    /// Drives `count` priority passes through the transport handler, always
-    /// from whichever seat actually holds priority, so the action ring fills
-    /// with genuine alternating entries rather than hand-pushed fixtures.
-    fn pass_priority_times(
-        mgr: &mut SessionManager,
-        code: &str,
-        token0: &str,
-        token1: &str,
-        count: usize,
-    ) {
-        for _ in 0..count {
-            let priority_player = match &mgr.sessions[code].state.waiting_for {
-                WaitingFor::Priority { player } => *player,
-                other => panic!("expected Priority, got {other:?}"),
-            };
-            let token = if priority_player == PlayerId(0) {
-                token0
-            } else {
-                token1
-            };
-            mgr.handle_action(code, token, GameAction::PassPriority)
-                .expect("priority holder may always pass");
+    /// Seeds a deterministic ring of rollback points by recording snapshots
+    /// directly, one per entry in `actors`, each carrying a distinct
+    /// `turn_number` so a mis-resolved handle restores a visibly wrong state.
+    ///
+    /// Deliberately not driven through the transport handler: what these tests
+    /// exercise is which entry a selector resolves to, and driving the fixture
+    /// game far enough to accumulate several entries per seat runs it into
+    /// `GameOver` (`make_deck` is one card type and the fixture decks out).
+    /// The capture sites themselves are covered by the transport tests above.
+    fn seed_rollback_points(session: &mut GameSession, actors: &[PlayerId]) {
+        for (index, actor) in actors.iter().enumerate() {
+            session.state.turn_number = index as u32 + 1;
+            // Decisive, so the routine quota plays no part here — retention is
+            // exercised directly in `takeback.rs`.
+            session.push_takeback_snapshot(*actor, &GameAction::CancelCast);
         }
     }
+
+    /// Alternating seats, which is what makes "my own actions" a real question:
+    /// every one of a seat's own points has another seat's point after it.
+    const ALTERNATING_SEATS: [PlayerId; 6] = [
+        PlayerId(0),
+        PlayerId(1),
+        PlayerId(0),
+        PlayerId(1),
+        PlayerId(0),
+        PlayerId(1),
+    ];
 
     /// The published rollback points for `player`, newest last.
     fn own_sequences(session: &GameSession, player: PlayerId) -> Vec<u64> {
@@ -3413,10 +3419,9 @@ mod tests {
     /// `LastAction`.
     #[test]
     fn a_granular_request_reaches_a_specific_earlier_action() {
-        let (mut mgr, code, token0, token1) = setup_two_player_game();
-        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
-
+        let (mut mgr, code, _token0, _token1) = setup_two_player_game();
         let session = mgr.sessions.get_mut(&code).unwrap();
+        seed_rollback_points(session, &ALTERNATING_SEATS);
         let mine = own_sequences(session, PlayerId(0));
         assert!(
             mine.len() >= 2,
@@ -3463,10 +3468,9 @@ mod tests {
     /// keeps "undo my misclick" from becoming "undo your play."
     #[test]
     fn a_player_may_not_anchor_a_rollback_on_another_seats_action() {
-        let (mut mgr, code, token0, token1) = setup_two_player_game();
-        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
-
+        let (mut mgr, code, _token0, _token1) = setup_two_player_game();
         let session = mgr.sessions.get_mut(&code).unwrap();
+        seed_rollback_points(session, &ALTERNATING_SEATS);
         let theirs = *own_sequences(session, PlayerId(1))
             .last()
             .expect("the other seat has acted");
@@ -3492,10 +3496,9 @@ mod tests {
     /// position.
     #[test]
     fn a_stale_action_handle_is_refused_rather_than_resolving_to_a_neighbour() {
-        let (mut mgr, code, token0, token1) = setup_two_player_game();
-        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
-
+        let (mut mgr, code, _token0, _token1) = setup_two_player_game();
         let session = mgr.sessions.get_mut(&code).unwrap();
+        seed_rollback_points(session, &ALTERNATING_SEATS);
         let live = *own_sequences(session, PlayerId(0))
             .last()
             .expect("non-empty");
@@ -3517,10 +3520,9 @@ mod tests {
     /// `resolve_action_rewind`.
     #[test]
     fn last_action_and_its_matching_handle_resolve_identically() {
-        let (mut mgr, code, token0, token1) = setup_two_player_game();
-        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
-
+        let (mut mgr, code, _token0, _token1) = setup_two_player_game();
         let session = mgr.sessions.get_mut(&code).unwrap();
+        seed_rollback_points(session, &ALTERNATING_SEATS);
         let newest = *own_sequences(session, PlayerId(0))
             .last()
             .expect("non-empty");
@@ -3553,8 +3555,8 @@ mod tests {
     /// list is the reach guard against a vacuously empty ring.
     #[test]
     fn undoable_actions_publishes_only_the_viewers_own_rollback_points() {
-        let (mut mgr, code, token0, token1) = setup_two_player_game();
-        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
+        let (mut mgr, code, _token0, _token1) = setup_two_player_game();
+        seed_rollback_points(mgr.sessions.get_mut(&code).unwrap(), &ALTERNATING_SEATS);
 
         let session = &mgr.sessions[&code];
         let mine = session.undoable_actions(PlayerId(0));
@@ -3588,10 +3590,9 @@ mod tests {
     /// carries the same scope the first broadcast did.
     #[test]
     fn a_pending_request_publishes_what_approving_would_discard() {
-        let (mut mgr, code, token0, token1) = setup_two_player_game();
-        pass_priority_times(&mut mgr, &code, &token0, &token1, 6);
-
+        let (mut mgr, code, _token0, _token1) = setup_two_player_game();
         let session = mgr.sessions.get_mut(&code).unwrap();
+        seed_rollback_points(session, &ALTERNATING_SEATS);
         let oldest = *own_sequences(session, PlayerId(0))
             .first()
             .expect("non-empty");
@@ -3612,7 +3613,7 @@ mod tests {
                 scope: Some(scope), ..
             }) => {
                 assert_eq!(scope.turn_number, target_turn);
-                assert_eq!(scope.action.as_deref(), Some("PassPriority"));
+                assert_eq!(scope.action.as_deref(), Some("CancelCast"));
                 assert!(
                     scope.discarded_points >= 2,
                     "a request reaching past the newest point discards more than one: {scope:?}"
@@ -4594,8 +4595,12 @@ mod tests {
     }
 
     /// **R4 — G2.** The turn ring reaches a boundary the action ring
-    /// structurally cannot: every wire `PassPriority` burns one of
-    /// `MAX_TAKEBACK_HISTORY`'s twelve slots, so a full turn never fits.
+    /// structurally cannot: a wire `PassPriority` is
+    /// `RewindSignificance::Routine`, so pass traffic recycles inside
+    /// `MAX_ROUTINE_TAKEBACK_ENTRIES` and a whole turn (CR 500.1) of it never
+    /// stays reachable. The retention split makes this MORE true than the flat
+    /// twelve-slot ring did, not less — which is exactly why the second ring
+    /// still has to exist after granular action rewind lands.
     #[test]
     fn turn_rewind_reaches_a_boundary_the_action_ring_cannot() {
         let (mut mgr, code, token0, token1) = single_user_game();
@@ -4613,7 +4618,7 @@ mod tests {
         while turns_played < 8 {
             let saturated = {
                 let s = &mgr.sessions[&code];
-                s.takeback_history.len() == MAX_TAKEBACK_HISTORY
+                !s.takeback_history.is_empty()
                     && s.takeback_history
                         .iter()
                         .all(|entry| entry.state.turn_number > target_turn)
@@ -4626,8 +4631,14 @@ mod tests {
         }
 
         let session = mgr.sessions.get_mut(&code).unwrap();
-        // Reach guard: the action ring is full AND can no longer see the target.
-        assert_eq!(session.takeback_history.len(), MAX_TAKEBACK_HISTORY);
+        // Reach guard: the action ring is at its bound for this traffic AND can
+        // no longer see the target. Pure priority passes are routine, so that
+        // bound is the quota, not the whole twelve slots.
+        assert_eq!(
+            session.takeback_history.len(),
+            MAX_ROUTINE_TAKEBACK_ENTRIES,
+            "pass traffic is routine, so the ring saturates at the routine quota"
+        );
         assert!(
             session
                 .takeback_history
