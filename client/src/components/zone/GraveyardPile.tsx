@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 
 import type { GameObject } from "../../adapter/types.ts";
 import { useCardImage } from "../../hooks/useCardImage.ts";
+import { useInspectHoverProps } from "../../hooks/useInspectHoverProps.ts";
 import { useGameStore } from "../../stores/gameStore.ts";
 import { useCanActForWaitingState } from "../../hooks/usePlayerId.ts";
 import { getWaitingForObjectChoiceIds } from "../../viewmodel/gameStateView.ts";
@@ -66,6 +67,14 @@ export function GraveyardPile({ playerId, onClick, size }: GraveyardPileProps) {
     return id != null ? (s.gameState?.objects[id] ?? null) : null;
   });
 
+  // Same gesture wiring as its sibling LibraryPile: the graveyard's top card is
+  // a visible card face, so hover (mouse) and long-press (finger) must preview
+  // it here exactly as they do everywhere else. `useInspectHoverProps` rather
+  // than `useCardHover` for the same reason the library pile picked it — it
+  // swallows the post-long-press click in the capture phase, so opening the
+  // zone viewer needs no `firedRef` guard on this button's own onClick.
+  const hoverProps = useInspectHoverProps();
+
   // Check if any graveyard card is selectable for the current engine prompt.
   const canActForWaitingState = useCanActForWaitingState();
   const hasTargetableCards = useGameStore((s) => {
@@ -104,10 +113,14 @@ export function GraveyardPile({ playerId, onClick, size }: GraveyardPileProps) {
   const stackDepth = Math.min(count - 1, 3);
   const w = size?.width ?? "var(--card-w)";
   const h = size?.height ?? "var(--card-h)";
+  // The top card is the only face this pile shows, so it is the only object the
+  // preview can be about.
+  const topHoverProps = topObject != null ? hoverProps(topObject.id) : undefined;
 
   return (
     <button
       onClick={(event) => onClick(event.currentTarget)}
+      {...topHoverProps}
       className={`group relative cursor-pointer ${hasTargetableCards || hasDelveableCards ? "ring-2 ring-amber-400/60 rounded-lg shadow-[0_0_12px_3px_rgba(201,176,55,0.8)]" : ""}`}
       title={t("zone.graveyardTitle", { count })}
       data-graveyard-pile={playerId}

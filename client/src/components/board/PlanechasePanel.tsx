@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import { dispatchAction } from "../../game/dispatch.ts";
+import { useCardHover } from "../../hooks/useCardHover.ts";
 import { useGameStore } from "../../stores/gameStore.ts";
 import { CardImage } from "../card/CardImage.tsx";
 import { ManaCostSymbols } from "../mana/ManaCostSymbols.tsx";
@@ -14,12 +15,19 @@ export function PlanechasePanel() {
     planechase?.active_plane != null ? gameState?.objects[planechase.active_plane] : undefined;
   const canRoll =
     planechase?.can_roll === true && legalActions.some((action) => action.type === "RollPlanarDie");
+  // The plane renders at 80x112, far too small to read its text, so it owes the
+  // same hover / long-press preview every other card face offers. Hooks run
+  // before the `!planechase` early return; a null id simply wires a no-op.
+  const { handlers: planeHoverHandlers } = useCardHover(activePlane?.id ?? null);
 
   if (!planechase) return null;
 
   return (
     <div className="pointer-events-auto absolute left-1/2 top-2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-md border border-slate-700 bg-slate-950/90 px-3 py-2 shadow-lg backdrop-blur">
-      <div className="h-[112px] w-[80px] shrink-0 [--card-h:112px] [--card-w:80px]">
+      <div
+        className="h-[112px] w-[80px] shrink-0 [--card-h:112px] [--card-w:80px]"
+        {...planeHoverHandlers}
+      >
         {activePlane ? (
           <CardImage
             cardName={activePlane.name}

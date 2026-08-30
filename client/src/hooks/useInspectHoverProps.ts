@@ -4,6 +4,7 @@ import type React from "react";
 import { useUiStore } from "../stores/uiStore.ts";
 import type { PreviewPlacement } from "../stores/uiStore.ts";
 import { useLongPress } from "./useLongPress.ts";
+import { useStickyPreview } from "./useStickyPreview.ts";
 import type { ObjectId } from "../adapter/types.ts";
 
 /**
@@ -35,7 +36,7 @@ import type { ObjectId } from "../adapter/types.ts";
  */
 export function useInspectHoverProps() {
   const inspectObject = useUiStore((s) => s.inspectObject);
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
+  const showStickyPreview = useStickyPreview();
 
   // Which card most recently began a press — lets the single shared long-press
   // timer resolve the correct id on fire (one active pointer at a time).
@@ -44,17 +45,9 @@ export function useInspectHoverProps() {
   const { handlers: longPressHandlers, firedRef } = useLongPress(
     useCallback(() => {
       if (pressedIdRef.current != null) {
-        // Long-press is explicit intent (a hold past the timer), so bypass hover
-        // latency and show the sticky preview immediately, mirroring useCardHover.
-        inspectObject(
-          pressedIdRef.current,
-          undefined,
-          "immediate",
-          pressedPlacementRef.current,
-        );
-        setPreviewSticky(true);
+        showStickyPreview(pressedIdRef.current, pressedPlacementRef.current);
       }
-    }, [inspectObject, setPreviewSticky]),
+    }, [showStickyPreview]),
   );
 
   // `useLongPress` returns a fresh object literal every render, so capture the

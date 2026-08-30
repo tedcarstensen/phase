@@ -10,6 +10,7 @@ import { useGameStore } from "../../stores/gameStore.ts";
 import { useUiStore } from "../../stores/uiStore.ts";
 import { usePreferencesStore } from "../../stores/preferencesStore.ts";
 import { useLongPress } from "../../hooks/useLongPress.ts";
+import { useStickyPreview } from "../../hooks/useStickyPreview.ts";
 import { useIsMobile } from "../../hooks/useIsMobile.ts";
 import { useIsCompactHeight } from "../../hooks/useIsCompactHeight.ts";
 import { getPlayerId, useCanActForWaitingState, usePerspectivePlayerId } from "../../hooks/usePlayerId.ts";
@@ -930,11 +931,10 @@ const HandCard = memo(function HandCard({
   const { displayCost, isReduced } = spellCostDisplay(effectiveCost, manaCost);
   const playedRef = useRef(false);
 
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
-  const { handlers: longPressHandlers, firedRef: longPressFired } = useLongPress(() => {
-    inspectObject(objectId);
-    setPreviewSticky(true);
-  });
+  const showStickyPreview = useStickyPreview();
+  const { handlers: longPressHandlers, firedRef: longPressFired } = useLongPress(() =>
+    showStickyPreview(objectId),
+  );
 
   const glowClass = hasPriority
     ? isPlayable
@@ -1107,11 +1107,10 @@ const ZoneFanCard = memo(function ZoneFanCard({
 }: ZoneFanCardProps) {
   const inspectObject = useUiStore((s) => s.inspectObject);
   const setDragging = useUiStore((s) => s.setDragging);
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
-  const { handlers: longPressHandlers, firedRef: longPressFired } = useLongPress(() => {
-    inspectObject(objectId);
-    setPreviewSticky(true);
-  });
+  const showStickyPreview = useStickyPreview();
+  const { handlers: longPressHandlers, firedRef: longPressFired } = useLongPress(() =>
+    showStickyPreview(objectId),
+  );
 
   const effectiveCost = useGameStore((s) => s.spellCosts[String(objectId)]);
   const { displayCost, isReduced } = spellCostDisplay(effectiveCost, manaCost);

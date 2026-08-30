@@ -143,6 +143,11 @@ function CompactCommandDock({
   const closeTimerRef = useRef<number | null>(null);
   const [popoverPos, setPopoverPos] = useState<{ left: number; top: number } | null>(null);
   const firstCommander = commanders[0];
+  // No preview gesture on this tile by design: it is a disclosure, not a card
+  // surface. Hover (desktop) and tap (touch) both open the dock, which renders
+  // the commander through CommanderCardZone — and that one does carry the
+  // shared gesture. Wiring a second preview here would fire alongside the
+  // dock's own hover-open on desktop.
   const imageProps = firstCommander ? objectImageProps(firstCommander) : null;
   const { src, isLoading, rungs, advanceFailedSource } = useCardImage(
     imageProps?.cardName ?? "",

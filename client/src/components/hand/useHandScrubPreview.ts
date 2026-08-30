@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 
 import { HAND_DRAG_PLAY_THRESHOLD } from "../../hooks/useDragToCast.ts";
+import { useStickyPreview } from "../../hooks/useStickyPreview.ts";
 import { useUiStore } from "../../stores/uiStore.ts";
 
 const HOLD_DELAY_MS = 400;
@@ -56,8 +57,7 @@ export function useHandScrubPreview(
   } = {},
 ) {
   const { isPlayable, canReleaseToCast, onReleaseToCast } = options;
-  const inspectObject = useUiStore((s) => s.inspectObject);
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
+  const showStickyPreview = useStickyPreview();
   const dismissPreview = useUiStore((s) => s.dismissPreview);
   const setMobileHandGesture = useUiStore((s) => s.setMobileHandGesture);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -131,11 +131,10 @@ export function useHandScrubPreview(
         width: card.offsetWidth || rect.width,
       };
       cardGrabOffsetXRef.current = x - centerX;
-      inspectObject(objectId, undefined, "immediate");
-      setPreviewSticky(true);
+      showStickyPreview(objectId);
       return objectId;
     },
-    [clearActiveCard, containerRef, inspectObject, setPreviewSticky],
+    [clearActiveCard, containerRef, showStickyPreview],
   );
 
   const updateGesture = useCallback(

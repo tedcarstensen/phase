@@ -9,6 +9,7 @@ import { UnimplementedMechanicsBadge } from "../card/UnimplementedMechanicsBadge
 import { useCardImage } from "../../hooks/useCardImage.ts";
 import { useIsMobile } from "../../hooks/useIsMobile.ts";
 import { useLongPress } from "../../hooks/useLongPress.ts";
+import { useStickyPreview } from "../../hooks/useStickyPreview.ts";
 import { useCanActForWaitingState, usePlayerId } from "../../hooks/usePlayerId.ts";
 import { useSeatColor } from "../../hooks/useSeatColor.ts";
 import { dispatchAction } from "../../game/dispatch.ts";
@@ -70,6 +71,9 @@ export function StackEntry({ entry, choiceObjectId = entry.id, groupedObjectIds,
   const pendingCast = useGameStore((s) => s.gameState?.pending_cast);
   const inspectObject = useUiStore((s) => s.inspectObject);
 
+  const showStickyPreview = useStickyPreview();
+  // Only the CLEAR half is still owned here — opening-and-pinning goes through
+  // `useStickyPreview`.
   const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
   const priorityYields = useGameStore((s) => s.gameState?.priority_yields);
   // CR 117.3d: a triggered ability can be pre-committed to auto-pass priority via
@@ -78,8 +82,7 @@ export function StackEntry({ entry, choiceObjectId = entry.id, groupedObjectIds,
   // inspect-and-pin for every entry, so it never competes with the mobile
   // card-preview gesture and the yield control isn't a hidden gesture.
   const { handlers: longPressHandlers, firedRef: longPressFired } = useLongPress(() => {
-    inspectObject(entry.source_id);
-    setPreviewSticky(true);
+    showStickyPreview(entry.source_id);
     onHoverChange?.(true);
   });
 

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 
 import { useLongPress } from "./useLongPress.ts";
 import { useIsMobile } from "./useIsMobile.ts";
+import { useStickyPreview } from "./useStickyPreview.ts";
 import { useUiStore } from "../stores/uiStore.ts";
 
 /**
@@ -16,19 +17,13 @@ import { useUiStore } from "../stores/uiStore.ts";
  */
 export function useCardHover(objectId: number | null) {
   const inspectObject = useUiStore((s) => s.inspectObject);
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
+  const showStickyPreview = useStickyPreview();
   const isMobile = useIsMobile();
 
   const { handlers: longPressHandlers, firedRef } = useLongPress(
     useCallback(() => {
-      if (objectId != null) {
-        // Long-press is an explicit-intent gesture (already a 400ms hold), so it
-        // bypasses the configurable hover latency and shows the sticky preview now
-        // — and setting it synchronously avoids orphaning previewSticky.
-        inspectObject(objectId, undefined, "immediate");
-        setPreviewSticky(true);
-      }
-    }, [inspectObject, setPreviewSticky, objectId]),
+      if (objectId != null) showStickyPreview(objectId);
+    }, [showStickyPreview, objectId]),
   );
 
   // Gate on the event's own `pointerType`, not on a `(any-hover: hover)` media

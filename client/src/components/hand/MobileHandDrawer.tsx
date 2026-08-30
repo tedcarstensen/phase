@@ -9,6 +9,7 @@ import { useUiStore } from "../../stores/uiStore.ts";
 import { usePreferencesStore } from "../../stores/preferencesStore.ts";
 import { useCardImage } from "../../hooks/useCardImage.ts";
 import { useCardHover } from "../../hooks/useCardHover.ts";
+import { useStickyPreview } from "../../hooks/useStickyPreview.ts";
 import { getCardImageSrcSetProps } from "../card/cardImageSrcSet.ts";
 import { useCanActForWaitingState, usePerspectivePlayerId } from "../../hooks/usePlayerId.ts";
 import { dispatchAction } from "../../game/dispatch.ts";
@@ -253,8 +254,7 @@ const DrawerCard = memo(function DrawerCard({
   onPlay,
   onDebugOpen,
 }: DrawerCardProps) {
-  const inspectObject = useUiStore((s) => s.inspectObject);
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
+  const showStickyPreview = useStickyPreview();
   const effectiveCost = useGameStore((s) => s.spellCosts[String(objectId)]);
   const { src, rungs, advanceFailedSource } = useCardImage(cardName, {
     size: "normal",
@@ -291,11 +291,10 @@ const DrawerCard = memo(function DrawerCard({
       if (isPlayable) {
         onPlay(objectId);
       } else {
-        inspectObject(objectId);
-        setPreviewSticky(true);
+        showStickyPreview(objectId);
       }
     },
-    [objectId, isPlayable, onPlay, onDebugOpen, inspectObject, setPreviewSticky, firedRef],
+    [objectId, isPlayable, onPlay, onDebugOpen, showStickyPreview, firedRef],
   );
 
   const glowClass = hasPriority && isPlayable

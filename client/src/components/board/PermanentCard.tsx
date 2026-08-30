@@ -14,6 +14,7 @@ import { useCardHover } from "../../hooks/useCardHover.ts";
 import { useIsCompactHeight } from "../../hooks/useIsCompactHeight.ts";
 import { useIsMobile } from "../../hooks/useIsMobile.ts";
 import { useLongPress } from "../../hooks/useLongPress.ts";
+import { useStickyPreview } from "../../hooks/useStickyPreview.ts";
 import { isUnbounded, pillsOf, useCounterDisplay } from "../../hooks/useCounterDisplay.ts";
 import { useGameStore } from "../../stores/gameStore.ts";
 import { renderDescription } from "../../utils/description.ts";
@@ -435,12 +436,9 @@ export const PermanentCard = memo(function PermanentCard({
 
   const isUndoableTap = undoableTapObjectIds.has(objectId);
 
-  const setPreviewSticky = useUiStore((s) => s.setPreviewSticky);
+  const showStickyPreview = useStickyPreview();
   const { handlers: longPressHandlers, firedRef: longPressFired } = useLongPress(
-    useCallback(() => {
-      inspectObject(objectId);
-      setPreviewSticky(true);
-    }, [inspectObject, setPreviewSticky, objectId]),
+    useCallback(() => showStickyPreview(objectId), [showStickyPreview, objectId]),
   );
 
   // Gate on the event's own `pointerType`, not on a `(any-hover: hover)` media
@@ -782,8 +780,9 @@ export const PermanentCard = memo(function PermanentCard({
       selectObject(objectId);
       showAttachmentFan();
     } else if (isMobile) {
-      inspectObject(objectId);
-      setPreviewSticky(true);
+      // Tap-to-preview is the same "open and pin" the long press performs, so it
+      // goes through the same authority rather than re-deriving the pair.
+      showStickyPreview(objectId);
     } else {
       selectObject(isSelected ? null : objectId);
     }

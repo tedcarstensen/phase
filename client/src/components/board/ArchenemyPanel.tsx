@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 
+import { useCardHover } from "../../hooks/useCardHover.ts";
 import { useGameStore } from "../../stores/gameStore.ts";
 import { CardImage } from "../card/CardImage.tsx";
 
@@ -12,13 +13,20 @@ export function ArchenemyPanel() {
     return scheme ? [scheme] : [];
   }) ?? [];
 
-  if (!archenemy) return null;
-
+  // The scheme renders at 80x112, far too small to read its text, so it owes the
+  // same hover / long-press preview every other card face offers. Hooks run
+  // before the `!archenemy` early return; a null id simply wires a no-op.
   const primaryScheme = activeSchemes[0];
+  const { handlers: schemeHoverHandlers } = useCardHover(primaryScheme?.id ?? null);
+
+  if (!archenemy) return null;
 
   return (
     <div className="pointer-events-auto absolute right-2 top-2 z-30 flex max-w-[min(92vw,30rem)] items-center gap-3 rounded-md border border-slate-700 bg-slate-950/90 px-3 py-2 text-slate-100 shadow-lg backdrop-blur">
-      <div className="h-[112px] w-[80px] shrink-0 [--card-h:112px] [--card-w:80px]">
+      <div
+        className="h-[112px] w-[80px] shrink-0 [--card-h:112px] [--card-w:80px]"
+        {...schemeHoverHandlers}
+      >
         {primaryScheme ? (
           <CardImage
             cardName={primaryScheme.name}
