@@ -4,6 +4,7 @@ mod draft_pools;
 mod logging;
 mod metrics;
 mod persistence;
+mod static_assets;
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -868,6 +869,14 @@ struct Cli {
     /// `NGROK_AUTHTOKEN` is set, the live tunnel URL is used when this is unset.
     #[arg(long, env = "PUBLIC_URL")]
     public_url: Option<String>,
+
+    /// Directory holding the built web client (`client/dist`). When set, this
+    /// process also serves the app, so the bundle, its card data, and `/ws` all
+    /// answer on one origin and one port — the whole self-hosted deployment in a
+    /// single container. Unset (the default) leaves the server WebSocket-only,
+    /// for setups that front it with their own static host.
+    #[arg(long, env = "PHASE_STATIC_DIR")]
+    static_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2335,6 +2344,13 @@ async fn serve() {
     }
     if let Some(token) = admin_token.as_deref().filter(|t| !t.is_empty()) {
         app = mount_admin_routes(app, token);
+    }
+
+    // Single-container hosting. Mounted last so every route above keeps
+    // precedence over the bundle and its SPA fallback.
+    if let Some(static_dir) = cli.static_dir.as_deref() {
+        info!(dir = %static_dir.display(), "serving the web client from this process");
+        app = static_assets::mount(app, static_dir, &cli.data_dir, get(ws_handler));
     }
 
     let app_state = AppState {

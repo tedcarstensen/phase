@@ -17,6 +17,13 @@ const PREVIEW_MANIFEST_URL: &str = "https://data.phase-rs.dev/desktop/preview-se
 const REQUIRED_DATA_FILES: [&str; 1] = ["card-data.json"];
 const BEST_EFFORT_DATA_FILES: [&str; 1] = ["draft-pools.json"];
 
+/// Every file this server keeps current in `PHASE_DATA_DIR`, and therefore the
+/// only ones same-origin static hosting exposes at the site root (see
+/// [`crate::static_assets`]). The data directory also holds `games.db` and log
+/// files, so the exposed set is this explicit list rather than the directory.
+/// Kept in step with the two lists above by `managed_data_files_cover_bootstrap`.
+pub(crate) const MANAGED_DATA_FILES: [&str; 2] = ["card-data.json", "draft-pools.json"];
+
 #[derive(Debug)]
 pub struct BootstrapError(String);
 
@@ -532,7 +539,8 @@ mod tests {
     use super::{
         bootstrap_missing_data_with_key, identity_from_markers, parse_manifest_data,
         resolve_manifest, verify_manifest_signature, verify_sha256, write_verified_data_file,
-        BootstrapOptions, ChannelIdentity,
+        BootstrapOptions, ChannelIdentity, BEST_EFFORT_DATA_FILES, MANAGED_DATA_FILES,
+        REQUIRED_DATA_FILES,
     };
     use sha2::{Digest, Sha256};
     use url::Url;
@@ -767,6 +775,19 @@ mod tests {
 
         assert!(error.to_string().contains("card-data.json"));
         assert!(error.to_string().contains("no PHASE_CHANNEL identity"));
+    }
+
+    #[test]
+    fn managed_data_files_cover_bootstrap() {
+        // Static hosting exposes MANAGED_DATA_FILES; the bootstrap decides what
+        // actually lands in the data directory. A file the bootstrap fetches but
+        // this list omits would 404 for a client built without DATA_BASE_URL.
+        for file in REQUIRED_DATA_FILES.iter().chain(&BEST_EFFORT_DATA_FILES) {
+            assert!(
+                MANAGED_DATA_FILES.contains(file),
+                "{file} is bootstrapped but not exposed by static hosting"
+            );
+        }
     }
 
     #[test]
