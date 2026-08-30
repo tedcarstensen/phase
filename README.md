@@ -208,11 +208,58 @@ docker run -d \
   ghcr.io/phase-rs/phase-server:latest
 ```
 
-The image (linux/amd64 and linux/arm64) includes the server binary; card data is
-downloaded into the data volume on first boot. It exposes:
+The published image (linux/amd64 and linux/arm64) is the server on its own; card
+data is downloaded into the data volume on first boot. It exposes:
 
 - `http://localhost:9374/health` for health checks
 - `ws://localhost:9374/ws` for WebSocket clients
+
+To get the web app in the same container, build the image yourself — see
+[One Container for Everything](#one-container-for-everything) below.
+
+### One Container for Everything
+
+A plain `docker buildx build .` also builds the web client and ships it in the
+image, so the whole self-hosted deployment is one container on one port — no
+static sidecar, no init container staging a `dist` artifact, and no second origin
+to keep in step with the server:
+
+```bash
+docker buildx build \
+  --build-arg PHASE_CHANNEL=release \
+  --build-arg DEFAULT_MULTIPLAYER_SERVER_URL=wss://play.example.com/ws \
+  -t phase:local .
+
+docker volume create phase-server-data
+docker run -d \
+  --name phase \
+  --restart unless-stopped \
+  -p 9374:9374 \
+  -v phase-server-data:/var/lib/phase-server \
+  phase:local
+```
+
+Open `http://localhost:9374/` and the app is there. The bundle, the card data it
+fetches (`/card-data.json`, served straight out of the data volume), `/health`
+and `/ws` all answer on that one port — and a WebSocket handshake is answered on
+*any* path, so a client pointed at `wss://play.example.com` connects just as one
+pointed at `wss://play.example.com/ws` does, instead of silently receiving the
+app's HTML and reporting the server as unreachable.
+
+Build args for the client stage:
+
+| Build arg | Default | Notes |
+|-----------|---------|-------|
+| `DEFAULT_MULTIPLAYER_SERVER_URL` | unset | Your `wss://host/ws`. Makes your server the bundle's default and first-listed pick instead of the public lobby |
+| `DATA_BASE_URL` | `https://data.phase-rs.dev` | Where the bundle fetches its shared JSON data (card names, Scryfall maps, precon decks) |
+| `AUDIO_BASE_URL` | `https://data.phase-rs.dev/audio` | Where the bundle fetches sound effects |
+| `FRONTEND_STAGE` | `frontend` | `no-frontend` builds the server on its own — what the published image is |
+
+The client lands in `/srv/phase-client`, and the entrypoint points
+`PHASE_STATIC_DIR` there whenever it finds an `index.html`. Set
+`PHASE_STATIC_DIR` yourself (with a volume mount) to serve a bundle built
+elsewhere — a release `dist` artifact, say — on top of the published
+server-only image.
 
 ### Server Modes and Options
 
@@ -229,6 +276,7 @@ Docker uses environment variables for the common options:
 | `PHASE_LOBBY_ONLY` | `--lobby-only` | false | Matchmaking broker mode |
 | `PHASE_LOG_JSON` | `--log-json` | false | Emit JSON logs |
 | `PHASE_LOG_DIR` | `--log-dir` | stdout | Write logs to files |
+| `PHASE_STATIC_DIR` | `--static-dir` | `/srv/phase-client` when it holds an `index.html`, else unset | Directory of the built web client to serve from this process |
 | `PHASE_ADMIN_TOKEN` | — | unset | Bearer token for `/admin/*` endpoints (environment variable only; no CLI flag). Unset ⇒ admin routes disabled (404). Send as `Authorization: Bearer <token>`. |
 
 You can also pass server flags after the image name:
@@ -255,13 +303,17 @@ docker run -d \
 The same flags work when running the `phase-server` release binary directly.
 
 To build the image yourself (cross-compiles on the build host, no emulated
-cargo):
+cargo; the client bundle is built once on the build host and shared by both
+platform legs):
 
 ```bash
 docker buildx create --use   # once: multi-platform builds need a docker-container builder
 docker buildx build --platform linux/amd64,linux/arm64 --build-arg PHASE_CHANNEL=release \
   -t <registry>/phase-server:latest --push .
 ```
+
+Add `--build-arg FRONTEND_STAGE=no-frontend` to reproduce the published
+server-only image instead.
 
 For Kubernetes, see the Helm chart in [`deploy/helm/phase-server`](deploy/helm/phase-server).
 

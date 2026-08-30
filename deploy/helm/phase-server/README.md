@@ -321,6 +321,13 @@ docker buildx build --platform linux/arm64 --build-arg PHASE_CHANNEL=release \
 Pin `image.digest` in your values; `:latest`-style tags resolve stale on some
 k3s nodes.
 
+That build also bakes the web client into the image, and the entrypoint serves
+it from the same port as `/ws`. If this chart is fronting a client you deploy
+separately, add `--build-arg FRONTEND_STAGE=no-frontend` to skip building it —
+that is what the published image is. Otherwise nothing else is needed: no static
+sidecar, no init container staging a `dist` artifact, and the Ingress routes
+every path to the one Service. See the README's *One Container for Everything*.
+
 ## Values
 
 Every key is documented inline in [`values.yaml`](values.yaml). Single replica,
