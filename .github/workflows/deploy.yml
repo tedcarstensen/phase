@@ -1007,6 +1007,8 @@ jobs:
         # BINARY_STAGE=prebuilt makes Docker copy the prebuilt musl binaries
         # instead of compiling in-container — the build is just apt + COPY.
         # One manifest list covers both platforms under the same tag/digest.
+        # FRONTEND_STAGE=no-frontend: the preview client is deployed separately
+        # to Pages, so the image stays server-only.
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -1014,6 +1016,7 @@ jobs:
           push: true
           build-args: |
             BINARY_STAGE=prebuilt
+            FRONTEND_STAGE=no-frontend
           tags: |
             ${{ env.IMAGE_NAME }}:preview
             ${{ env.IMAGE_NAME }}:sha-${{ steps.image.outputs.short_sha }}

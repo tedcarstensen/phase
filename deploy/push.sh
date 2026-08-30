@@ -21,7 +21,10 @@ if [ "${healthy:-0}" != "1" ]; then
 fi'
 
 echo "Building ${IMAGE}..."
-docker buildx build --load -t "$IMAGE" .
+# Server-only: this host is fronted by nginx and serves the client from
+# Cloudflare Pages, so building the bundle into the image would only slow
+# the deploy loop down.
+docker buildx build --load --build-arg FRONTEND_STAGE=no-frontend -t "$IMAGE" .
 
 echo "Uploading image to ${HOST}..."
 docker save "$IMAGE" | ssh "${HOST}" "sudo docker load"

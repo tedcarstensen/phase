@@ -674,6 +674,9 @@ jobs:
         # BINARY_STAGE=prebuilt: copy the musl binaries from build-server-binary
         # instead of compiling in-container — the build is just apt + COPY.
         # One manifest list covers both platforms under the same tag/digest.
+        # FRONTEND_STAGE=no-frontend: this workflow already builds the client
+        # bundle and publishes it to Cloudflare Pages (deploy-production), so
+        # rebuilding it inside the image would duplicate that work.
         uses: docker/build-push-action@v6
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
@@ -683,6 +686,7 @@ jobs:
           push: true
           build-args: |
             BINARY_STAGE=prebuilt
+            FRONTEND_STAGE=no-frontend
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
             ${{ env.IMAGE_NAME }}:latest
