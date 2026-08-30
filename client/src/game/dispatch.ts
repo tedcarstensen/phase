@@ -1,4 +1,4 @@
-import type { AiActionProposal, EngineAdapter, EngineSnapshot, GameAction, GameEvent, GameLogEntry, GameState, RewindOption, WaitingFor } from "../adapter/types";
+import type { AiActionProposal, EngineAdapter, EngineSnapshot, GameAction, GameEvent, GameLogEntry, GameState, RewindOption, UndoableAction, WaitingFor } from "../adapter/types";
 import type { InteractionSubmission } from "../adapter/generated/interaction";
 import { actionRejectionError, AdapterError, AdapterErrorCode } from "../adapter/types";
 import { reportStructuredActionRejection } from "./actionRejectionReporter";
@@ -76,6 +76,7 @@ interface PendingRemoteUpdate {
   logEntries?: GameLogEntry[];
   /** See `processRemoteUpdateInner`: `undefined` and `[]` mean different things. */
   rewindTargets?: RewindOption[];
+  undoableActions?: UndoableAction[];
   resolve: () => void;
   reject: (err: unknown) => void;
 }
@@ -629,6 +630,7 @@ async function processQueue(generation: number): Promise<void> {
           next.logEntries,
           generation,
           next.rewindTargets,
+          next.undoableActions,
         );
       }
       next.resolve();
@@ -838,6 +840,7 @@ async function processRemoteUpdateInner(
   logEntries: GameLogEntry[] = [],
   generation: number,
   rewindTargets?: RewindOption[],
+  undoableActions?: UndoableAction[],
 ): Promise<void> {
   if (!isCurrentDispatchGeneration(generation)) return;
   const state = snapshot.state;
@@ -905,6 +908,12 @@ async function processRemoteUpdateInner(
   if (rewindTargets) {
     useGameStore.getState().setRewindTargets(rewindTargets);
   }
+  // Same contract, same gate, same reason as the turn list above: the two
+  // granularities are published together by the server and are written
+  // together here.
+  if (undoableActions) {
+    useGameStore.getState().setUndoableActions(undoableActions);
+  }
 
   // 6. Play victory/defeat stinger on GameOver
   const gameOverEvent = events.find((e) => e.type === "GameOver");
@@ -929,17 +938,18 @@ export async function processRemoteUpdate(
   events: GameEvent[],
   logEntries?: GameLogEntry[],
   rewindTargets?: RewindOption[],
+  undoableActions?: UndoableAction[],
 ): Promise<void> {
   if (isAnimating) {
     return new Promise<void>((resolve, reject) => {
-      pendingQueue.push({ kind: "remote", snapshot, events, logEntries, rewindTargets, resolve, reject });
+      pendingQueue.push({ kind: "remote", snapshot, events, logEntries, rewindTargets, undoableActions, resolve, reject });
     });
   }
 
   const generation = dispatchGeneration;
   isAnimating = true;
   try {
-    await processRemoteUpdateInner(snapshot, events, logEntries, generation, rewindTargets);
+    await processRemoteUpdateInner(snapshot, events, logEntries, generation, rewindTargets, undoableActions);
   } finally {
     releaseDispatchMutex(generation);
   }

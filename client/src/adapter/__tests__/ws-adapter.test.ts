@@ -348,6 +348,59 @@ describe("WebSocketAdapter", () => {
       });
     });
 
+    it("sends the data-bearing frame for a specific action", () => {
+      adapter.sendRequestTakeback({ kind: "action", sequence: 41 });
+      expect(JSON.parse(ws.send.mock.lastCall![0] as string)).toEqual({
+        type: "RequestTakeback",
+        data: { kind: "action", sequence: 41 },
+      });
+    });
+
+    it("emits undoableActions from a StateUpdate that carries them", () => {
+      const listener = vi.fn();
+      adapter.onEvent(listener);
+      const row = {
+        sequence: 7,
+        actor: 0,
+        action: "CastSpell",
+        turn_number: 3,
+        phase: "PreCombatMain",
+        significance: "decisive",
+      };
+      ws.dispatchSynthetic(
+        "message",
+        JSON.stringify({
+          type: "StateUpdate",
+          data: {
+            state: createMockState(),
+            events: [],
+            undoable_actions: [row],
+          },
+        }),
+      );
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "stateChanged", undoableActions: [row] }),
+      );
+    });
+
+    // Same forward-skew contract as `rewind_targets` below it: an omitted
+    // field is `[]` ("the server published none"), never `undefined`, which
+    // `dispatch.ts` reads as "this transport does not publish" and ignores.
+    it("emits an empty array when a StateUpdate omits undoable_actions", () => {
+      const listener = vi.fn();
+      adapter.onEvent(listener);
+      ws.dispatchSynthetic(
+        "message",
+        JSON.stringify({
+          type: "StateUpdate",
+          data: { state: createMockState(), events: [] },
+        }),
+      );
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "stateChanged", undoableActions: [] }),
+      );
+    });
+
     it("emits rewindTargets from a StateUpdate that carries them", () => {
       const listener = vi.fn();
       adapter.onEvent(listener);

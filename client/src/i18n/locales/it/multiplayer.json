@@ -19,7 +19,8 @@
     "approve": "Approva",
     "decline": "Rifiuta",
     "cancel": "Annulla richiesta",
-    "declinedToast": "Richiesta di ripristino rifiutata"
+    "declinedToast": "Richiesta di ripristino rifiutata",
+    "scopeLine": "Riporta la partita al turno {{turn}}."
   },
   "connectionDot": {
     "connected": "Connesso",
@@ -266,5 +267,13 @@
     "checkingLegality": "Verifica della legalità del mazzo…",
     "legal": "✓ Legale in {{format}}",
     "notLegal": "Non legale in {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Annulla un'azione",
+    "subtitle": "Scegli quanto indietro riportare la partita. Tutti i giocatori devono approvare.",
+    "actionRow": "Turno {{turn}} — {{action}}",
+    "turnRow": "Inizio del turno {{turn}}",
+    "routine": "minore",
+    "cancel": "Annulla"
   }
 }

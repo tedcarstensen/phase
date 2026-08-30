@@ -19,7 +19,8 @@
     "approve": "Approve",
     "decline": "Decline",
     "cancel": "Cancel request",
-    "declinedToast": "Takeback request declined"
+    "declinedToast": "Takeback request declined",
+    "scopeLine": "Rolls the game back to turn {{turn}}."
   },
   "connectionDot": {
     "connected": "Connected",
@@ -266,5 +267,13 @@
     "checkingLegality": "Checking deck legality…",
     "legal": "✓ Legal in {{format}}",
     "notLegal": "Not legal in {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Undo an action",
+    "subtitle": "Choose how far back to roll the game. Every player must approve.",
+    "actionRow": "Turn {{turn}} — {{action}}",
+    "turnRow": "Start of turn {{turn}}",
+    "routine": "minor",
+    "cancel": "Cancel"
   }
 }

@@ -4279,13 +4279,50 @@ export interface RewindOption {
 }
 
 /**
+ * How much of the game an action committed, as classified by the server's
+ * retention policy. Rendered as a hint about which rows are the meaningful
+ * ones; never recomputed here from the action name.
+ */
+export type RewindSignificance = "routine" | "decisive";
+
+/**
+ * One of the viewer's OWN past actions the server offers as a rollback target.
+ * Snake_case because this is the wire shape verbatim (`server-core`'s
+ * `UndoableAction`). Already narrowed to this seat by the server, so the client
+ * renders the rows it is handed and filters nothing.
+ */
+export interface UndoableAction {
+  /** Opaque handle. Echo it back as `{ kind: "action", sequence }`. */
+  readonly sequence: number;
+  readonly actor: PlayerId;
+  /** The engine's `GameAction` variant name, e.g. `"CastSpell"`. */
+  readonly action: string;
+  readonly turn_number: number;
+  readonly phase: string;
+  readonly significance: RewindSignificance;
+}
+
+/**
  * How far back a rollback request reaches. Mirrors `server-core`'s
  * `RewindTarget` — an internally tagged union, not a boolean pair, because the
- * two granularities carry different payloads.
+ * three granularities carry different payloads.
  */
 export type RewindTarget =
   | { readonly kind: "last_action" }
+  | { readonly kind: "action"; readonly sequence: number }
   | { readonly kind: "turn_start"; readonly turn_number: number };
+
+/**
+ * What approving a pending rollback would discard, as published with the
+ * request. Mirrors `server-core`'s `TakebackScope`; optional because a server
+ * that predates granular rewind sends no scope at all.
+ */
+export interface TakebackScope {
+  readonly turn_number: number;
+  readonly phase: string;
+  readonly action: string | null;
+  readonly discarded_points: number;
+}
 
 /**
  * Optional transport capability for a *server-authoritative* rollback. Shaped

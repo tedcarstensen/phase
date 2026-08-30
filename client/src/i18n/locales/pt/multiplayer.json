@@ -19,7 +19,8 @@
     "approve": "Aprovar",
     "decline": "Recusar",
     "cancel": "Cancelar solicitação",
-    "declinedToast": "Solicitação de retrocesso recusada"
+    "declinedToast": "Solicitação de retrocesso recusada",
+    "scopeLine": "Retorna a partida para o turno {{turn}}."
   },
   "connectionDot": {
     "connected": "Conectado",
@@ -266,5 +267,13 @@
     "checkingLegality": "Verificando a validade do deck…",
     "legal": "✓ Válido em {{format}}",
     "notLegal": "Não válido em {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Desfazer uma ação",
+    "subtitle": "Escolha até onde voltar na partida. Todos os jogadores precisam aprovar.",
+    "actionRow": "Turno {{turn}} — {{action}}",
+    "turnRow": "Início do turno {{turn}}",
+    "routine": "menor",
+    "cancel": "Cancelar"
   }
 }

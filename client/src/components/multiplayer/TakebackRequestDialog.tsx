@@ -1,10 +1,18 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslation } from "react-i18next";
 
+import type { TakebackScope } from "../../adapter/types";
+
 interface TakebackRequestDialogProps {
   isOpen: boolean;
   /** Display name of the player who requested the takeback. */
   requesterName: string;
+  /**
+   * What approving would discard, as published with the request. `null` for a
+   * server that predates granular rewind, which degrades to the plain ask
+   * rather than describing a rollback it cannot see.
+   */
+  scope: TakebackScope | null;
   /** True when the local player is the one who made the request — shows a
    * "waiting for approval" message with a cancel option instead of the
    * approve/decline choice. */
@@ -19,10 +27,19 @@ interface TakebackRequestDialogProps {
  * The requester sees a waiting state with the option to withdraw; every
  * other human seat sees an approve/decline choice. The dialog closes itself
  * when the parent observes `TakebackResolved` and sets `isOpen` to false.
+ *
+ * The scope line is what makes the unanimity vote informed consent rather than
+ * a rubber stamp. A rollback that reaches past another player's action discards
+ * it, and nothing can un-reveal what that action showed — so the depth of the
+ * request has to be in front of the approver *before* they approve it, not
+ * inferable only afterwards from the board. It is server-authored: this dialog
+ * renders the published turn number and never computes how far back a request
+ * reaches.
  */
 export function TakebackRequestDialog({
   isOpen,
   requesterName,
+  scope,
   isOwnRequest,
   onApprove,
   onDecline,
@@ -51,7 +68,10 @@ export function TakebackRequestDialog({
                 <h2 className="mb-2 text-xl font-bold text-white">
                   {t("takebackDialog.ownTitle")}
                 </h2>
-                <p className="mb-6 text-sm text-gray-400">{t("takebackDialog.ownMessage")}</p>
+                <p className="mb-2 text-sm text-gray-400">{t("takebackDialog.ownMessage")}</p>
+                <p className="mb-6 text-sm text-gray-500">
+                  {scope ? t("takebackDialog.scopeLine", { turn: scope.turn_number }) : null}
+                </p>
                 <div className="flex justify-center gap-3">
                   <button
                     onClick={onCancel}
@@ -66,8 +86,11 @@ export function TakebackRequestDialog({
                 <h2 className="mb-2 text-xl font-bold text-white">
                   {t("takebackDialog.requestedTitle", { name: requesterName })}
                 </h2>
-                <p className="mb-6 text-sm text-gray-400">
+                <p className="mb-2 text-sm text-gray-400">
                   {t("takebackDialog.requestedMessage")}
+                </p>
+                <p className="mb-6 text-sm text-gray-500">
+                  {scope ? t("takebackDialog.scopeLine", { turn: scope.turn_number }) : null}
                 </p>
                 <div className="flex justify-center gap-3">
                   <button

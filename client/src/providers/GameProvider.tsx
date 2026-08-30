@@ -1226,7 +1226,7 @@ export function GameProvider({
             if (needAdapter) {
               useGameStore.setState({ adapter: wsAdapter });
             }
-            processRemoteUpdate(event.snapshot, event.events, event.logEntries, event.rewindTargets).catch((err) => {
+            processRemoteUpdate(event.snapshot, event.events, event.logEntries, event.rewindTargets, event.undoableActions).catch((err) => {
               debugLog(`remote update failed: ${err instanceof Error ? err.message : String(err)}`);
               resyncFromAdapterSafely("delivery rejected");
             });
@@ -1670,7 +1670,7 @@ export function GameProvider({
               if (!useGameStore.getState().adapter && adapter) {
                 useGameStore.setState({ adapter });
               }
-              processRemoteUpdate(event.snapshot, event.events, event.logEntries, event.rewindTargets).catch((err) => {
+              processRemoteUpdate(event.snapshot, event.events, event.logEntries, event.rewindTargets, event.undoableActions).catch((err) => {
                 debugLog(`remote update failed: ${err instanceof Error ? err.message : String(err)}`);
                 resyncFromAdapterSafely("delivery rejected");
               });

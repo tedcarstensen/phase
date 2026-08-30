@@ -19,7 +19,8 @@
     "approve": "Aprobar",
     "decline": "Rechazar",
     "cancel": "Cancelar solicitud",
-    "declinedToast": "Solicitud de repetición rechazada"
+    "declinedToast": "Solicitud de repetición rechazada",
+    "scopeLine": "Retrocede la partida al turno {{turn}}."
   },
   "connectionDot": {
     "connected": "Conectado",
@@ -266,5 +267,13 @@
     "checkingLegality": "Comprobando la legalidad del mazo…",
     "legal": "✓ Legal en {{format}}",
     "notLegal": "No es legal en {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Deshacer una acción",
+    "subtitle": "Elige hasta dónde retroceder la partida. Todos los jugadores deben aprobarlo.",
+    "actionRow": "Turno {{turn}} — {{action}}",
+    "turnRow": "Inicio del turno {{turn}}",
+    "routine": "menor",
+    "cancel": "Cancelar"
   }
 }

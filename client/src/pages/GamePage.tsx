@@ -21,6 +21,8 @@ import type {
   ObjectId,
   SerializedAbilityCost,
   AiDecisionDiagnosticReceipt,
+  RewindTarget,
+  TakebackScope,
 } from "../adapter/types";
 import { supportsAiDecisionDiagnostics, supportsMatchConcede } from "../adapter/types";
 import type {
@@ -143,6 +145,7 @@ import { AiDecisionOverlay } from "../components/chrome/AiDecisionOverlay.tsx";
 import { GameMenu } from "../components/chrome/GameMenu.tsx";
 import { ConcedeDialog } from "../components/multiplayer/ConcedeDialog.tsx";
 import { TakebackRequestDialog } from "../components/multiplayer/TakebackRequestDialog.tsx";
+import { TakebackTargetPicker } from "../components/multiplayer/TakebackTargetPicker.tsx";
 import { ConnectionToast } from "../components/multiplayer/ConnectionToast.tsx";
 import { EmoteOverlay } from "../components/multiplayer/EmoteOverlay.tsx";
 import { ResolutionProgressOverlay } from "../components/board/ResolutionProgressOverlay.tsx";
@@ -370,7 +373,7 @@ export function GamePage() {
   const hasConcededRef = useRef(false);
   // GH #1507: "request takeback" — the table-wide pending request, if any.
   const [pendingTakeback, setPendingTakeback] = useState<
-    { requester: number; requesterName: string } | null
+    { requester: number; requesterName: string; scope: TakebackScope | null } | null
   >(null);
 
   const handleWsEvent = useCallback((event: WsAdapterEvent) => {
@@ -473,6 +476,7 @@ export function GamePage() {
         setPendingTakeback({
           requester: event.requester,
           requesterName: event.requesterName,
+          scope: event.scope,
         });
         break;
       case "takebackResolved":
@@ -832,7 +836,7 @@ interface GamePageContentProps {
   timerRemaining: Record<number, number>;
   gameStartedAt: number | null;
   terminalReason: string | null;
-  pendingTakeback: { requester: number; requesterName: string } | null;
+  pendingTakeback: { requester: number; requesterName: string; scope: TakebackScope | null } | null;
   onCloseTakebackDialog: () => void;
   // 3-4p P2P additions
   disconnectChoice: { playerId: number; gracePeriodMs: number } | null;
@@ -879,6 +883,11 @@ function GamePageContent({
 
   const waitingFor = useGameStore((s) => s.waitingFor);
   const lobbyProgress = useGameStore((s) => s.lobbyProgress);
+  // Server-published rollback destinations. Rendered as handed over; the picker
+  // never appends, filters or reorders them by rule (see its doc comment).
+  const undoableActions = useGameStore((s) => s.undoableActions);
+  const rewindTargets = useGameStore((s) => s.rewindTargets);
+  const [takebackPickerOpen, setTakebackPickerOpen] = useState(false);
   const dispatch = useGameDispatch();
   const isMobile = useIsMobile();
   useGameViewportLock();
@@ -1141,12 +1150,25 @@ function GamePageContent({
   );
 
   // GH #1507: "request takeback" — ask every other human player to approve
-  // rolling the game back to before this player's last action.
-  const handleRequestTakeback = useCallback(() => {
+  // rolling the game back. `target` selects which rollback point; omitting it
+  // keeps the pre-existing last-action meaning.
+  const handleRequestTakeback = useCallback((target?: RewindTarget) => {
     if (adapter && adapter instanceof WebSocketAdapter) {
-      adapter.sendRequestTakeback();
+      adapter.sendRequestTakeback(target);
     }
   }, [adapter]);
+
+  // The menu entry opens the picker only when the server has published more
+  // than one destination. With one (or none) there is nothing to pick, so the
+  // entry keeps firing the immediate last-action request it always has — a
+  // modal offering a single button is worse than no modal.
+  const handleOpenTakeback = useCallback(() => {
+    if (undoableActions.length + rewindTargets.length <= 1) {
+      handleRequestTakeback();
+      return;
+    }
+    setTakebackPickerOpen(true);
+  }, [undoableActions.length, rewindTargets.length, handleRequestTakeback]);
 
   const handleRespondTakeback = useCallback(
     (approve: boolean) => {
@@ -1761,7 +1783,7 @@ function GamePageContent({
         // dead button that silently no-ops inside the handler's own guard.
         onRequestTakeback={
           adapter instanceof WebSocketAdapter && mode !== "spectate"
-            ? handleRequestTakeback
+            ? handleOpenTakeback
             : undefined
         }
         takebackAudience={hasRemoteHumans(storeGameMode) ? "table" : "solo"}
@@ -2267,10 +2289,21 @@ function GamePageContent({
           <TakebackRequestDialog
             isOpen={pendingTakeback !== null}
             requesterName={pendingTakeback?.requesterName ?? ""}
+            scope={pendingTakeback?.scope ?? null}
             isOwnRequest={pendingTakeback?.requester === playerId}
             onApprove={() => handleRespondTakeback(true)}
             onDecline={() => handleRespondTakeback(false)}
             onCancel={handleCancelTakeback}
+          />
+          <TakebackTargetPicker
+            isOpen={takebackPickerOpen}
+            undoableActions={undoableActions}
+            turnBoundaries={rewindTargets}
+            onSelect={(target) => {
+              setTakebackPickerOpen(false);
+              handleRequestTakeback(target);
+            }}
+            onCancel={() => setTakebackPickerOpen(false)}
           />
           {!isSpectatorMode && (
             <EmoteOverlay

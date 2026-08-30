@@ -13,6 +13,8 @@ import type {
   PersistedGameState,
   RewindOption,
   RewindTarget,
+  TakebackScope,
+  UndoableAction,
   SubmitResult,
   FormatConfig,
 } from "./types";
@@ -538,12 +540,14 @@ export type WsAdapterEvent =
   | { type: "stateChanged"; snapshot: EngineSnapshot; events: GameEvent[]; logEntries?: GameLogEntry[]; serverRevision?: number;
       /** Server-published turn boundaries. Always an array on this transport —
        *  `[]` means "the server published none", never "unknown". */
-      rewindTargets?: RewindOption[] }
+      rewindTargets?: RewindOption[];
+      /** This seat's own server-published rollback points, same contract. */
+      undoableActions?: UndoableAction[] }
   | { type: "sessionAttached"; attachment: NativeSessionAttachment }
   | { type: "emoteReceived"; fromPlayer: PlayerId; emote: string }
   | { type: "conceded"; player: PlayerId }
   | { type: "timerUpdate"; player: PlayerId; remainingSeconds: number }
-  | { type: "takebackRequested"; requester: PlayerId; requesterName: string }
+  | { type: "takebackRequested"; requester: PlayerId; requesterName: string; scope: TakebackScope | null }
   | { type: "takebackResolved"; approved: boolean; resolvedBy: PlayerId | null }
   /** The server refused a fire-and-forget request (e.g. `RequestTakeback`).
    *  Distinct from `error`, which the native session treats as terminal:
@@ -1108,9 +1112,10 @@ export class WebSocketAdapter implements EngineAdapter {
    *
    * The last-action frame deliberately carries NO `data` key — byte-identical
    * to the frame this client has always sent, and the shape the server's
-   * `Option<RewindTarget>` newtype variant exists to accept. Only a turn rewind
-   * carries a payload, and the client can only ask for a turn the server itself
-   * published in `rewind_targets`.
+   * `Option<RewindTarget>` newtype variant exists to accept. Every other
+   * granularity carries a payload, and the client can only ask for a row the
+   * server itself published — a turn in `rewind_targets`, or one of its own
+   * actions in `undoable_actions`.
    */
   sendRequestTakeback(target: RewindTarget = { kind: "last_action" }): void {
     if (target.kind === "last_action") {
@@ -1545,7 +1550,7 @@ export class WebSocketAdapter implements EngineAdapter {
       }
 
       case "GameStarted": {
-        const data = msg.data as { state_revision: number; state: GameState; your_player: PlayerId; opponent_name?: string; player_names?: string[]; legal_actions?: GameAction[]; auto_pass_recommended?: boolean; end_continuous_effect_offers?: LegalActionsResult["endContinuousEffectOffers"]; mana_payment_shortcut_actions?: GameAction[]; spell_costs?: Record<string, ManaCost>; legal_actions_by_object?: Record<string, GameAction[]>; viewer_interaction?: LegalActionsResult["viewerInteraction"]; derived?: GameState["derived"]; player_token?: string; full_key?: FullSessionKey; events?: GameEvent[]; rewind_targets?: RewindOption[] };
+        const data = msg.data as { state_revision: number; state: GameState; your_player: PlayerId; opponent_name?: string; player_names?: string[]; legal_actions?: GameAction[]; auto_pass_recommended?: boolean; end_continuous_effect_offers?: LegalActionsResult["endContinuousEffectOffers"]; mana_payment_shortcut_actions?: GameAction[]; spell_costs?: Record<string, ManaCost>; legal_actions_by_object?: Record<string, GameAction[]>; viewer_interaction?: LegalActionsResult["viewerInteraction"]; derived?: GameState["derived"]; player_token?: string; full_key?: FullSessionKey; events?: GameEvent[]; rewind_targets?: RewindOption[]; undoable_actions?: UndoableAction[] };
         const nativeReconnect = this.options.nativePregame?.kind === "reconnect"
           ? this.options.nativePregame
           : null;
@@ -1634,6 +1639,7 @@ export class WebSocketAdapter implements EngineAdapter {
         // would mean "this transport does not publish", which is false here —
         // an omitted field means the server published none.
         const startedRewindTargets = data.rewind_targets ?? [];
+        const startedUndoableActions = data.undoable_actions ?? [];
         if (this.options.nativePregame) {
           this.emit({
             type: "stateChanged",
@@ -1641,6 +1647,7 @@ export class WebSocketAdapter implements EngineAdapter {
             events: data.events ?? [],
             serverRevision: data.state_revision,
             rewindTargets: startedRewindTargets,
+            undoableActions: startedUndoableActions,
           });
         } else if (!initializedNow) {
           // Reconnect path — no initResolve pending, so emit state change
@@ -1652,13 +1659,14 @@ export class WebSocketAdapter implements EngineAdapter {
             snapshot: startedSnapshot,
             events: [],
             rewindTargets: startedRewindTargets,
+            undoableActions: startedUndoableActions,
           });
         }
         break;
       }
 
       case "StateUpdate": {
-        const data = msg.data as { state_revision: number; state: GameState; events: GameEvent[]; legal_actions?: GameAction[]; auto_pass_recommended?: boolean; end_continuous_effect_offers?: LegalActionsResult["endContinuousEffectOffers"]; mana_payment_shortcut_actions?: GameAction[]; spell_costs?: Record<string, ManaCost>; legal_actions_by_object?: Record<string, GameAction[]>; viewer_interaction?: LegalActionsResult["viewerInteraction"]; log_entries?: GameLogEntry[]; derived?: GameState["derived"]; rewind_targets?: RewindOption[] };
+        const data = msg.data as { state_revision: number; state: GameState; events: GameEvent[]; legal_actions?: GameAction[]; auto_pass_recommended?: boolean; end_continuous_effect_offers?: LegalActionsResult["endContinuousEffectOffers"]; mana_payment_shortcut_actions?: GameAction[]; spell_costs?: Record<string, ManaCost>; legal_actions_by_object?: Record<string, GameAction[]>; viewer_interaction?: LegalActionsResult["viewerInteraction"]; log_entries?: GameLogEntry[]; derived?: GameState["derived"]; rewind_targets?: RewindOption[]; undoable_actions?: UndoableAction[] };
         // Attach the engine-authored derived views to the state snapshot so
         // components (e.g. CommanderDamage) can read them via gameState.derived
         // without a separate subscription path. See
@@ -1690,6 +1698,7 @@ export class WebSocketAdapter implements EngineAdapter {
             logEntries: data.log_entries,
             serverRevision: data.state_revision,
             rewindTargets: data.rewind_targets ?? [],
+            undoableActions: data.undoable_actions ?? [],
           });
         }
         break;
@@ -1873,11 +1882,14 @@ export class WebSocketAdapter implements EngineAdapter {
       }
 
       case "TakebackRequested": {
-        const data = msg.data as { requester: PlayerId; requester_name: string };
+        const data = msg.data as { requester: PlayerId; requester_name: string; scope?: TakebackScope };
         this.emit({
           type: "takebackRequested",
           requester: data.requester,
           requesterName: data.requester_name,
+          // `null`, not `undefined`: an absent scope is a server that predates
+          // granular rewind, which the prompt renders as the plain ask.
+          scope: data.scope ?? null,
         });
         break;
       }

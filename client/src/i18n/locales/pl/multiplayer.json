@@ -19,7 +19,8 @@
     "approve": "Zatwierdź",
     "decline": "Odmów",
     "cancel": "Anuluj prośbę",
-    "declinedToast": "Prośba o wycofanie ruchu odrzucona"
+    "declinedToast": "Prośba o wycofanie ruchu odrzucona",
+    "scopeLine": "Cofa grę do tury {{turn}}."
   },
   "connectionDot": {
     "connected": "Połączono",
@@ -266,5 +267,13 @@
     "checkingLegality": "Sprawdzanie zgodności talii z zasadami…",
     "legal": "✓ Dozwolona w formacie {{format}}",
     "notLegal": "Niedozwolona w formacie {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Cofnij akcję",
+    "subtitle": "Wybierz, jak daleko cofnąć grę. Wszyscy gracze muszą wyrazić zgodę.",
+    "actionRow": "Tura {{turn}} — {{action}}",
+    "turnRow": "Początek tury {{turn}}",
+    "routine": "drobna",
+    "cancel": "Anuluj"
   }
 }

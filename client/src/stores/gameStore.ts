@@ -16,6 +16,7 @@ import type {
   PlayerId,
   PersistedGameState,
   RewindOption,
+  UndoableAction,
   RestoredStackAutomationPresentation,
   StuckDecisionDiagnostic,
   WaitingFor,
@@ -241,6 +242,13 @@ interface GameStoreState {
    */
   rewindTargets: RewindOption[];
   /**
+   * This seat's own server-published rollback points, newest last. Mirrors the
+   * server exactly — already narrowed to this viewer server-side, never
+   * filtered or appended to here. Empty on every transport that does not
+   * publish them.
+   */
+  undoableActions: UndoableAction[];
+  /**
    * Pre-game P2P lobby fill state, populated by the `lobbyProgress` adapter
    * event and cleared when `game_setup` arrives (game starts). `null` when
    * not in a pre-game P2P lobby (i.e. during AI/online games or after the
@@ -340,6 +348,7 @@ interface GameStoreActions {
    * must not clobber the list with a stale one.
    */
   setRewindTargets: (targets: RewindOption[]) => void;
+  setUndoableActions: (actions: UndoableAction[]) => void;
   reset: () => void;
   setAdapter: (adapter: EngineAdapter) => void;
   /**
@@ -439,6 +448,7 @@ async function seedResumedServerGame(
       stateHistory: [],
       turnCheckpoints: [],
       rewindTargets: [],
+      undoableActions: [],
       restoredStackAutomation: resumed?.presentation ?? null,
     },
   });
@@ -468,6 +478,7 @@ const initialState: GameStoreState = {
   stateHistory: [],
   turnCheckpoints: [],
   rewindTargets: [],
+  undoableActions: [],
   lobbyProgress: null,
   restoredStackAutomation: null,
   startingContest: null,
@@ -592,6 +603,7 @@ export const useGameStore = create<GameStore>()(
           stateHistory: [],
           turnCheckpoints: [],
           rewindTargets: [],
+          undoableActions: [],
           startingContest,
           restoredStackAutomation: null,
         },
@@ -622,6 +634,7 @@ export const useGameStore = create<GameStore>()(
           stateHistory: [],
           turnCheckpoints: savedCheckpoints,
           rewindTargets: [],
+          undoableActions: [],
           restoredStackAutomation: resumed?.presentation ?? null,
         },
       });
@@ -724,6 +737,10 @@ export const useGameStore = create<GameStore>()(
 
     setRewindTargets: (targets) => {
       set({ rewindTargets: targets });
+    },
+
+    setUndoableActions: (actions) => {
+      set({ undoableActions: actions });
     },
 
     reset: () => {

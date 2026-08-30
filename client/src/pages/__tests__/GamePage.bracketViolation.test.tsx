@@ -161,6 +161,11 @@ vi.mock("../../stores/gameStore", async () => ({
         logHistory: [],
         adapter: storeOverrides.adapter,
         lobbyProgress: null,
+        // Server-published rollback destinations. Arrays, not `undefined`:
+        // `GamePageContent` reads their lengths to decide whether the menu
+        // entry opens the picker or fires the last-action request directly.
+        undoableActions: [],
+        rewindTargets: [],
       }),
     ),
     { setState: mockSetGameState },

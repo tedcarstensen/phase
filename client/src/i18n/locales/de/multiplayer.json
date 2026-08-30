@@ -19,7 +19,8 @@
     "approve": "Zustimmen",
     "decline": "Ablehnen",
     "cancel": "Anfrage abbrechen",
-    "declinedToast": "Rücknahmeanfrage abgelehnt"
+    "declinedToast": "Rücknahmeanfrage abgelehnt",
+    "scopeLine": "Setzt das Spiel auf Zug {{turn}} zurück."
   },
   "connectionDot": {
     "connected": "Verbunden",
@@ -266,5 +267,13 @@
     "checkingLegality": "Deck-Legalität wird geprüft…",
     "legal": "✓ Legal in {{format}}",
     "notLegal": "Nicht legal in {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Eine Aktion rückgängig machen",
+    "subtitle": "Wähle, wie weit das Spiel zurückgesetzt wird. Alle Spieler müssen zustimmen.",
+    "actionRow": "Zug {{turn}} — {{action}}",
+    "turnRow": "Beginn von Zug {{turn}}",
+    "routine": "geringfügig",
+    "cancel": "Abbrechen"
   }
 }

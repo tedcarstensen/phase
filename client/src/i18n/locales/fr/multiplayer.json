@@ -19,7 +19,8 @@
     "approve": "Approuver",
     "decline": "Refuser",
     "cancel": "Annuler la demande",
-    "declinedToast": "Demande de reprise refusée"
+    "declinedToast": "Demande de reprise refusée",
+    "scopeLine": "Revient au tour {{turn}} de la partie."
   },
   "connectionDot": {
     "connected": "Connecté",
@@ -266,5 +267,13 @@
     "checkingLegality": "Vérification de la légalité du deck…",
     "legal": "✓ Légal en {{format}}",
     "notLegal": "Non légal en {{format}}"
+  },
+  "takebackPicker": {
+    "title": "Annuler une action",
+    "subtitle": "Choisissez jusqu'où revenir en arrière. Tous les joueurs doivent approuver.",
+    "actionRow": "Tour {{turn}} — {{action}}",
+    "turnRow": "Début du tour {{turn}}",
+    "routine": "mineure",
+    "cancel": "Annuler"
   }
 }
