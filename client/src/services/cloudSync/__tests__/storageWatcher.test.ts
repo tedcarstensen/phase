@@ -2,11 +2,18 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PREFERENCES_KEY } from "../../../constants/storage";
+import { profileStorage } from "../../profileStorage";
 import {
   watchUserStorage,
   withStorageWatchSuppressed,
 } from "../storageWatcher";
 
+/**
+ * The watcher observes the durable profile store, not `Storage.prototype`, so
+ * every case here drives `profileStorage`. Without IndexedDB (jsdom has none)
+ * the store runs on its localStorage fallback, which is what lets these tests
+ * still assert against `localStorage` for the written value.
+ */
 const cleanups: Array<() => void> = [];
 
 afterEach(() => {
@@ -14,17 +21,17 @@ afterEach(() => {
     cleanup();
   });
   localStorage.clear();
-  sessionStorage.clear();
+  vi.restoreAllMocks();
 });
 
-function watch(onDirty: (key: string) => void): () => void {
+function watch(onDirty: (key: string, origin: "local" | "remote") => void): () => void {
   const cleanup = watchUserStorage(onDirty);
   cleanups.push(cleanup);
   return cleanup;
 }
 
 describe("watchUserStorage", () => {
-  it("notifies every registration for relevant localStorage writes and keeps duplicate callbacks independent", () => {
+  it("notifies every registration for relevant profile writes and keeps duplicate callbacks independent", () => {
     const first = vi.fn();
     const second = vi.fn();
     const duplicate = vi.fn();
@@ -33,75 +40,73 @@ describe("watchUserStorage", () => {
     const removeFirstDuplicate = watch(duplicate);
     watch(duplicate);
 
-    localStorage.setItem(PREFERENCES_KEY, "first");
+    profileStorage.setItem(PREFERENCES_KEY, "first");
     removeFirst();
     removeFirstDuplicate();
-    localStorage.removeItem(PREFERENCES_KEY);
+    profileStorage.removeItem(PREFERENCES_KEY);
 
     expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenNthCalledWith(1, PREFERENCES_KEY);
-    expect(second).toHaveBeenNthCalledWith(2, PREFERENCES_KEY);
+    expect(second).toHaveBeenNthCalledWith(1, PREFERENCES_KEY, "local");
+    expect(second).toHaveBeenNthCalledWith(2, PREFERENCES_KEY, "local");
     expect(duplicate).toHaveBeenCalledTimes(3);
   });
 
-  it("ignores sessionStorage and non-user-owned keys while writing before notification", () => {
+  it("ignores non-profile keys and writes before notifying", () => {
     const observedValues: Array<string | null> = [];
     const dirty = vi.fn((key: string) => {
-      observedValues.push(localStorage.getItem(key));
+      observedValues.push(profileStorage.getItem(key));
     });
     watch(dirty);
 
-    localStorage.setItem("unrelated", "ignored");
-    sessionStorage.setItem(PREFERENCES_KEY, "ignored");
-    localStorage.setItem(PREFERENCES_KEY, "written-first");
+    profileStorage.setItem("unrelated", "ignored");
+    profileStorage.setItem(PREFERENCES_KEY, "written-first");
 
-    expect(dirty).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY);
+    expect(dirty).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY, "local");
     expect(observedValues).toEqual(["written-first"]);
   });
 
-  it("owns the shared prototype wrapper until the final cleanup, then can install again", () => {
-    const originalSetItem = Storage.prototype.setItem;
-    const originalRemoveItem = Storage.prototype.removeItem;
-    const firstCleanup = watch(vi.fn());
-    const wrappedSetItem = Storage.prototype.setItem;
-    const wrappedRemoveItem = Storage.prototype.removeItem;
-    const secondDirty = vi.fn();
-    const secondCleanup = watch(secondDirty);
+  it("forwards the origin so each subscriber can apply its own policy", () => {
+    const dirty = vi.fn();
+    const subscribe = vi.spyOn(profileStorage, "subscribe");
+    watch(dirty);
+    const notifyStore = subscribe.mock.calls[0][0];
 
-    expect(Storage.prototype.setItem).toBe(wrappedSetItem);
-    expect(Storage.prototype.removeItem).toBe(wrappedRemoveItem);
-    firstCleanup();
-    firstCleanup();
-    expect(Storage.prototype.setItem).toBe(wrappedSetItem);
-    expect(Storage.prototype.removeItem).toBe(wrappedRemoveItem);
-    secondCleanup();
-    expect(Storage.prototype.setItem).toBe(originalSetItem);
-    expect(Storage.prototype.removeItem).toBe(originalRemoveItem);
-    wrappedSetItem.call(localStorage, PREFERENCES_KEY, "captured-wrapper");
-    expect(localStorage.getItem(PREFERENCES_KEY)).toBe("captured-wrapper");
+    notifyStore({ key: PREFERENCES_KEY, origin: "remote" });
 
-    const resubscribedDirty = vi.fn();
-    watch(resubscribedDirty);
-    localStorage.setItem(PREFERENCES_KEY, "resubscribed");
-    expect(resubscribedDirty).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY);
+    expect(dirty).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY, "remote");
   });
 
-  it("does not notify after a native write throws", () => {
-    const originalSetItem = Storage.prototype.setItem;
-    const throwingSetItem = vi.fn(() => {
+  it("owns one shared store subscription until the final cleanup, then can resubscribe", () => {
+    const subscribe = vi.spyOn(profileStorage, "subscribe");
+    const unsubscribe = vi.fn();
+    subscribe.mockReturnValue(unsubscribe);
+
+    const firstCleanup = watch(vi.fn());
+    const secondCleanup = watch(vi.fn());
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    firstCleanup();
+    firstCleanup();
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    secondCleanup();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    watch(vi.fn());
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not notify when the durable write throws", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("storage quota exceeded");
     });
-    Storage.prototype.setItem = throwingSetItem;
     const dirty = vi.fn();
-    const cleanup = watch(dirty);
+    watch(dirty);
 
-    expect(() => localStorage.setItem(PREFERENCES_KEY, "nope")).toThrow(
+    expect(() => profileStorage.setItem(PREFERENCES_KEY, "nope")).toThrow(
       "storage quota exceeded",
     );
     expect(dirty).not.toHaveBeenCalled();
-
-    cleanup();
-    Storage.prototype.setItem = originalSetItem;
   });
 
   it("suppresses all subscribers across nested scopes and restores after a throwing scope", () => {
@@ -111,11 +116,11 @@ describe("watchUserStorage", () => {
     watch(second);
 
     withStorageWatchSuppressed(() => {
-      localStorage.setItem(PREFERENCES_KEY, "outer");
+      profileStorage.setItem(PREFERENCES_KEY, "outer");
       withStorageWatchSuppressed(() => {
-        localStorage.removeItem(PREFERENCES_KEY);
+        profileStorage.removeItem(PREFERENCES_KEY);
       });
-      localStorage.setItem(PREFERENCES_KEY, "still-outer");
+      profileStorage.setItem(PREFERENCES_KEY, "still-outer");
     });
 
     expect(first).not.toHaveBeenCalled();
@@ -126,8 +131,8 @@ describe("watchUserStorage", () => {
       }),
     ).toThrow("apply failed");
 
-    localStorage.setItem(PREFERENCES_KEY, "ordinary");
-    expect(first).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY);
-    expect(second).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY);
+    profileStorage.setItem(PREFERENCES_KEY, "ordinary");
+    expect(first).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY, "local");
+    expect(second).toHaveBeenCalledExactlyOnceWith(PREFERENCES_KEY, "local");
   });
 });

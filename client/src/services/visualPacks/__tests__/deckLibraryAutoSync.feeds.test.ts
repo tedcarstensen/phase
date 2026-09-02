@@ -43,6 +43,7 @@ import {
   hydrateFeedCache,
   setCachedFeed,
 } from "../../feedPersistence.ts";
+import { captureRemoteProfileChanges } from "../../profileStorage/__tests__/remoteProfileChange.ts";
 import { useDeckLibraryAutoSync } from "../deckLibraryAutoSync.ts";
 import { invalidateDeckLibraryPack, planDeckLibraryPack } from "../deckLibraryPack.ts";
 import { packId } from "../types.ts";
@@ -124,11 +125,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+let peerTab: ReturnType<typeof captureRemoteProfileChanges>;
+
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.clear();
   idb.records.clear();
   vi.clearAllMocks();
+  // Peer-tab writes reach this tab through the profile store, not the
+  // `storage` event — the profile lives in IndexedDB, which emits none.
+  peerTab = captureRemoteProfileChanges();
   idb.createStore.mockReturnValue({});
   idb.del.mockImplementation(async (key: string) => { idb.records.delete(key); });
   idb.entries.mockImplementation(async () => [...idb.records.entries()]);
@@ -172,10 +178,7 @@ describe("useDeckLibraryAutoSync feed freshness", () => {
       plan.observed(await planDeckLibraryPack(packId("deck_library")));
     });
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await flush();
 
     expect(backend.reconcileDeckLibrary).toHaveBeenCalledTimes(1);
@@ -210,10 +213,7 @@ describe("useDeckLibraryAutoSync feed freshness", () => {
     });
 
     vi.mocked(idbEntries).mockRejectedValueOnce(new Error("offline IDB"));
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await flush();
 
     expect(backend.reconcileDeckLibrary).not.toHaveBeenCalled();
@@ -247,15 +247,9 @@ describe("useDeckLibraryAutoSync feed freshness", () => {
     backend.reconcileDeckLibrary.mockClear();
     platform.load.mockClear();
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await flush();
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     firstRead.resolve([]);
     await flush();
     expect(backend.reconcileDeckLibrary).not.toHaveBeenCalled();
@@ -287,15 +281,9 @@ describe("useDeckLibraryAutoSync feed freshness", () => {
       plan.observed(await planDeckLibraryPack(packId("deck_library")));
     });
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await flush();
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     firstRead.resolve([["source", feed("source", ["Old Deck"])] ]);
     await flush();
     secondRead.resolve([["source", feed("source", ["New Deck"])] ]);
@@ -326,10 +314,7 @@ describe("useDeckLibraryAutoSync feed freshness", () => {
     await flush();
     expect(platform.load).toHaveBeenCalledTimes(1);
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await act(async () => { loading.resolve(backend); });
     expect(backend.reconcileDeckLibrary).not.toHaveBeenCalled();
 
@@ -370,15 +355,9 @@ describe("useDeckLibraryAutoSync feed freshness", () => {
       plan.observed(await planDeckLibraryPack(packId("deck_library")));
     });
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await flush();
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: PREFERENCES_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(PREFERENCES_KEY));
     firstRead.resolve([["source", feed("source", ["Fresh Art"])] ]);
     await flush();
     expect(rehydrate).toHaveBeenCalledTimes(1);

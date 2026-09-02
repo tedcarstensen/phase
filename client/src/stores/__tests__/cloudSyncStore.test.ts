@@ -92,7 +92,9 @@ let provider: {
   restoreSession: ReturnType<typeof vi.fn>;
   subscribe: ReturnType<typeof vi.fn>;
 };
-let watchedStorageCallback: ((key: string) => void) | undefined;
+let watchedStorageCallback:
+  | ((key: string, origin?: "local" | "remote") => void)
+  | undefined;
 let storageWatchSuppressionDepth = 0;
 let applyBackupSuppressionDepths: number[] = [];
 const storageDirtyNotification = vi.fn();
@@ -106,13 +108,17 @@ beforeEach(() => {
   watchedStorageCallback = undefined;
   storageWatchSuppressionDepth = 0;
   applyBackupSuppressionDepths = [];
-  watchUserStorageMock.mockImplementation((callback: (key: string) => void) => {
-    watchedStorageCallback = (key) => {
-      storageDirtyNotification(key);
-      callback(key);
-    };
-    return watcherUnsubscribeMock;
-  });
+  watchUserStorageMock.mockImplementation(
+    (callback: (key: string, origin: "local" | "remote") => void) => {
+      // The profile store reports where a change came from; this tab's own
+      // writes are the common case, so they are the default here.
+      watchedStorageCallback = (key, origin = "local") => {
+        storageDirtyNotification(key);
+        callback(key, origin);
+      };
+      return watcherUnsubscribeMock;
+    },
+  );
   withStorageWatchSuppressedMock.mockImplementation((fn: () => void) => {
     storageWatchSuppressionDepth += 1;
     try {
@@ -340,6 +346,22 @@ describe("cloudSyncStore storage watcher integration", () => {
     expect(provider.pullMeta).toHaveBeenCalledTimes(1);
     cleanup();
     expect(watcherUnsubscribeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a peer tab's write, which that tab is already pushing", async () => {
+    vi.useFakeTimers();
+    provider.restoreSession.mockReturnValue(new Promise(() => {}));
+    provider.pullMeta.mockResolvedValue(null);
+    buildBackupMock.mockReturnValue(fakeBackup());
+    const cleanup = useCloudSyncStore.getState().init();
+
+    watchedStorageCallback?.("phase-deck:peer-tab-write", "remote");
+    await Promise.resolve();
+
+    expect(useCloudSyncStore.getState().dirty).toBe(false);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(provider.pullMeta).not.toHaveBeenCalled();
+    cleanup();
   });
 
   it("leaves the watcher available to independent subscribers when no provider is configured", () => {

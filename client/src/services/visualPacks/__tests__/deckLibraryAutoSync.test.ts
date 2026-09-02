@@ -23,6 +23,8 @@ import {
   setCachedFeed,
 } from "../../feedPersistence.ts";
 import type { PrintingEntry } from "../../scryfall.ts";
+import { profileStorage } from "../../profileStorage/index.ts";
+import { captureRemoteProfileChanges } from "../../profileStorage/__tests__/remoteProfileChange.ts";
 import { useDeckLibraryAutoSync } from "../deckLibraryAutoSync.ts";
 import { planDeckLibraryPack } from "../deckLibraryPack.ts";
 import { packId } from "../types.ts";
@@ -111,9 +113,12 @@ function plannerFixture(): void {
   }];
 }
 
+let peerTab: ReturnType<typeof captureRemoteProfileChanges>;
+
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.clear();
+  peerTab = captureRemoteProfileChanges();
   _resetFeedCacheForTests();
   platform.load.mockReset();
   feedRefresh.refresh.mockReset();
@@ -158,20 +163,13 @@ describe("useDeckLibraryAutoSync", () => {
     planner.invalidate.mockClear();
 
     act(() => {
-      localStorage.setItem(STORAGE_KEY_PREFIX + "Deck", "{}");
-      localStorage.setItem(STORAGE_KEY_PREFIX + "Deck", "{\"updated\":true}");
-      localStorage.removeItem(STORAGE_KEY_PREFIX + "Deck");
-      localStorage.setItem(FEED_SUBSCRIPTIONS_KEY, "[]");
-      localStorage.setItem(FEED_DECK_ORIGINS_KEY, "{}");
-      localStorage.setItem("phase-active-game", "ignored");
-      window.dispatchEvent(new StorageEvent("storage", {
-        key: STORAGE_KEY_PREFIX + "CrossTabDeck",
-        storageArea: localStorage,
-      }));
-      window.dispatchEvent(new StorageEvent("storage", {
-        key: STORAGE_KEY_PREFIX + "SessionDeck",
-        storageArea: sessionStorage,
-      }));
+      profileStorage.setItem(STORAGE_KEY_PREFIX + "Deck", "{}");
+      profileStorage.setItem(STORAGE_KEY_PREFIX + "Deck", "{\"updated\":true}");
+      profileStorage.removeItem(STORAGE_KEY_PREFIX + "Deck");
+      profileStorage.setItem(FEED_SUBSCRIPTIONS_KEY, "[]");
+      profileStorage.setItem(FEED_DECK_ORIGINS_KEY, "{}");
+      profileStorage.setItem("phase-active-game", "ignored");
+      peerTab.emit(STORAGE_KEY_PREFIX + "CrossTabDeck");
     });
     await flush();
 
@@ -187,16 +185,13 @@ describe("useDeckLibraryAutoSync", () => {
     backend.reconcileDeckLibrary.mockClear();
     feedRefresh.refresh.mockClear();
 
-    act(() => localStorage.setItem(FEED_SUBSCRIPTIONS_KEY, "[]"));
+    act(() => profileStorage.setItem(FEED_SUBSCRIPTIONS_KEY, "[]"));
     await flush();
     expect(feedRefresh.refresh).not.toHaveBeenCalled();
     expect(backend.reconcileDeckLibrary).toHaveBeenCalledTimes(1);
 
     backend.reconcileDeckLibrary.mockClear();
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: FEED_SUBSCRIPTIONS_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(FEED_SUBSCRIPTIONS_KEY));
     await flush();
     expect(feedRefresh.refresh).toHaveBeenCalledTimes(1);
     expect(backend.reconcileDeckLibrary).toHaveBeenCalledTimes(1);
@@ -239,7 +234,7 @@ describe("useDeckLibraryAutoSync", () => {
     backend.reconcileDeckLibrary.mockClear();
 
     act(() => {
-      window.dispatchEvent(new StorageEvent("storage", { key: PREFERENCES_KEY, storageArea: localStorage }));
+      peerTab.emit(PREFERENCES_KEY);
       window.dispatchEvent(new CustomEvent(PROFILE_REPLACED_EVENT));
     });
     await flush();
@@ -260,7 +255,7 @@ describe("useDeckLibraryAutoSync", () => {
     await flush();
     expect(platform.load).toHaveBeenCalledTimes(1);
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", { key: PREFERENCES_KEY, storageArea: localStorage })));
+    act(() => peerTab.emit(PREFERENCES_KEY));
     await act(async () => { resolveLoad(backend); });
     expect(backend.reconcileDeckLibrary).not.toHaveBeenCalled();
     await flush();
@@ -280,10 +275,7 @@ describe("useDeckLibraryAutoSync", () => {
     await flush();
     backend.reconcileDeckLibrary.mockClear();
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: PREFERENCES_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(PREFERENCES_KEY));
     await flush();
     expect(rehydrate).toHaveBeenCalledTimes(1);
     expect(backend.reconcileDeckLibrary).not.toHaveBeenCalled();
@@ -355,10 +347,7 @@ describe("useDeckLibraryAutoSync", () => {
       resolvePlan(await planDeckLibraryPack(packId("deck_library")));
     });
 
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: PREFERENCES_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(PREFERENCES_KEY));
     await flush();
     expect(backend.reconcileDeckLibrary).not.toHaveBeenCalled();
     await act(async () => { releaseRehydrate(); });
@@ -454,7 +443,7 @@ describe("useDeckLibraryAutoSync", () => {
     const mounted = renderHook(() => useDeckLibraryAutoSync());
     mounted.unmount();
     await flush();
-    act(() => localStorage.setItem(STORAGE_KEY_PREFIX + "Deck", "{}"));
+    act(() => profileStorage.setItem(STORAGE_KEY_PREFIX + "Deck", "{}"));
     await flush();
     expect(platform.load).not.toHaveBeenCalled();
   });
@@ -480,10 +469,7 @@ describe("useDeckLibraryAutoSync", () => {
     await flush();
     platform.load.mockClear();
     backend.reconcileDeckLibrary.mockClear();
-    act(() => window.dispatchEvent(new StorageEvent("storage", {
-      key: PREFERENCES_KEY,
-      storageArea: localStorage,
-    })));
+    act(() => peerTab.emit(PREFERENCES_KEY));
     await flush();
     rehydratingMount.unmount();
     await act(async () => { releaseRehydrate(); });

@@ -139,20 +139,26 @@ export function useDeckLibraryAutoSync(): void {
     };
 
     signalRef.current = signal;
-    const unwatchStorage = watchUserStorage((key) => {
-      if (watchesCatalogKey(key)) signal(false);
+    // Same-tab and peer-tab profile writes both arrive here: the profile store
+    // lives in IndexedDB, which emits no `storage` event, so it replicates peer
+    // writes itself and tags them `remote`. A peer's write is the one that
+    // leaves this tab's own copies stale — its preferences slice and its feed
+    // cache were both loaded before that write happened — so `remote` is what
+    // asks for a refresh rather than a plain reconcile.
+    const unwatchStorage = watchUserStorage((key, origin) => {
+      if (key === PREFERENCES_KEY) {
+        // Same-tab preference edits arrive through the store subscription
+        // below, which sees the decoded values rather than the raw slice.
+        if (origin === "remote") signal(true);
+        return;
+      }
+      if (watchesCatalogKey(key)) signal(false, origin === "remote");
     });
     const unwatchPreferences = usePreferencesStore.subscribe((next, previous) => {
       if (next.artChain !== previous.artChain || next.artOverrides !== previous.artOverrides) signal(false);
     });
-    const onStorage = (event: StorageEvent) => {
-      if (event.storageArea !== localStorage || !event.key) return;
-      if (event.key === PREFERENCES_KEY) signal(true);
-      else if (watchesCatalogKey(event.key)) signal(false, true);
-    };
     const onProfileReplaced = () => signal(true, true);
     const onOnline = () => signal(true, true);
-    window.addEventListener("storage", onStorage);
     window.addEventListener(PROFILE_REPLACED_EVENT, onProfileReplaced);
     window.addEventListener("online", onOnline);
 
@@ -162,7 +168,6 @@ export function useDeckLibraryAutoSync(): void {
       if (timer) clearTimeout(timer);
       unwatchStorage();
       unwatchPreferences();
-      window.removeEventListener("storage", onStorage);
       window.removeEventListener(PROFILE_REPLACED_EVENT, onProfileReplaced);
       window.removeEventListener("online", onOnline);
     };
