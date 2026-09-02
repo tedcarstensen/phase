@@ -62,6 +62,10 @@ import type {
   PlayerSlot,
   SeatMutation,
 } from "../multiplayer/seatTypes";
+import {
+  optionalDisplayName,
+  requiredDisplayName,
+} from "../multiplayer/displayName";
 export type { DeckChoice, PlayerSlot, SeatKind, SeatMutation } from "../multiplayer/seatTypes";
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
@@ -1037,7 +1041,7 @@ export const useMultiplayerStore = create<MultiplayerState & MultiplayerActions>
             type: "CreateGameWithSettings",
             data: {
               deck: asDeckPayload(deck),
-              display_name: settings.displayName,
+              display_name: requiredDisplayName(settings.displayName),
               public: settings.public,
               password: settings.password || null,
               timer_seconds: settings.timerSeconds,
@@ -1258,7 +1262,7 @@ export const useMultiplayerStore = create<MultiplayerState & MultiplayerActions>
             const registered = await broker.registerHost({
               hostPeerId: host.peer.id,
               deck: asDeckPayload(deck),
-              displayName: get().displayName || "Host",
+              displayName: requiredDisplayName(get().displayName, "Host"),
               public: settings.public,
               password: settings.password || null,
               timerSeconds: null,
@@ -1302,7 +1306,7 @@ export const useMultiplayerStore = create<MultiplayerState & MultiplayerActions>
             {
               gameId,
               roomCode: host.roomCode,
-              hostDisplayName: get().displayName || undefined,
+              hostDisplayName: optionalDisplayName(get().displayName),
             },
             nativeP2P,
           );
@@ -1563,7 +1567,7 @@ export const useMultiplayerStore = create<MultiplayerState & MultiplayerActions>
             // (required-label rule) and the worker shell drops it without a
             // reply — the guest then times out at deck-select. Always carry
             // the player's name so the frame validates.
-            displayName: get().displayName || "Player",
+            displayName: requiredDisplayName(get().displayName),
           });
         } finally {
           pendingJoinRpcAborts.delete(ac);

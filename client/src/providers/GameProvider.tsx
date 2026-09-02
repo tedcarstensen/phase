@@ -77,6 +77,7 @@ import {
 } from "../stores/gameStore";
 import type { AISeatBinding } from "../game/controllers/aiController";
 import { useMultiplayerStore } from "../stores/multiplayerStore";
+import { requiredDisplayName } from "../multiplayer/displayName";
 import { useMultiplayerDraftStore } from "../stores/multiplayerDraftStore";
 import {
   assignRandomAvatars,
@@ -870,7 +871,7 @@ export function GameProvider({
               const result = await store.openBroker({
                 hostPeerId: host.peer.id,
                 deck: deckList.player,
-                displayName: store.displayName || "Host",
+                displayName: requiredDisplayName(store.displayName, "Host"),
                 public: true,
                 password: null,
                 timerSeconds: null,

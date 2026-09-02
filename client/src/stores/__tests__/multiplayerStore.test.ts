@@ -555,6 +555,52 @@ describe("multiplayerStore", () => {
     expect(frame.data.ai_seats).toEqual(aiSeats);
   });
 
+  // Regression: the store default is `displayName: ""` and the preferences
+  // field accepts whitespace, but the broker's `validate_required_label`
+  // trims before its empty check and answers `"display_name must not be
+  // empty"`. An unguarded send made hosting impossible until the player
+  // happened to set a name.
+  it.each(["", "   "])(
+    "sends a non-blank display_name when the player has not set one: %j",
+    async (displayName) => {
+      useMultiplayerStore.getState().startHosting(
+        hostingSettings({ displayName }),
+        {
+          main_deck: ["Forest"],
+          sideboard: [],
+          commander: ["Goreclaw, Terror of Qal Sisma"],
+        },
+      );
+
+      await waitFor(() => expect(socketMocks.send).toHaveBeenCalled());
+      const frame = JSON.parse(socketMocks.send.mock.calls[0][0] as string) as {
+        type: string;
+        data: { display_name: string };
+      };
+      expect(frame.type).toBe("CreateGameWithSettings");
+      expect(frame.data.display_name.trim()).not.toBe("");
+    },
+  );
+
+  it("registers a non-blank display name with the broker when the player has not set one", async () => {
+    useMultiplayerStore.setState({ displayName: "   " });
+
+    const ok = await useMultiplayerStore.getState().startP2PHostingSession(
+      hostingSettings(),
+      {
+        main_deck: ["Forest"],
+        sideboard: [],
+        commander: ["Goreclaw, Terror of Qal Sisma"],
+      },
+      { useBroker: true },
+    );
+
+    expect(ok).toBe(true);
+    expect(brokerMocks.registerHost).toHaveBeenCalledWith(
+      expect.objectContaining({ displayName: "Host" }),
+    );
+  });
+
   it("saves server-host metadata with the reconnect token while waiting for players", async () => {
     useMultiplayerStore.getState().startHosting(
       hostingSettings(),

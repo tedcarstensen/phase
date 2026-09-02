@@ -27,6 +27,7 @@ import type { LiveCheck, MultiplayerView } from "./multiplayerPageState";
 import { classifyCompatResult } from "./multiplayerPageState";
 import { clearWsSession } from "../services/multiplayerSession";
 import { findLobbyGameByCode, useMultiplayerStore } from "../stores/multiplayerStore";
+import { requiredDisplayName } from "../multiplayer/displayName";
 import {
   useMultiplayerDraftStore,
   type MultiplayerDraftPhase,
@@ -523,7 +524,7 @@ export function MultiplayerPage() {
   // and are always P2P — the guest joins via PeerJS room code.
   const handleJoinDraftFromLobby = useCallback(
     async (code: string, _context?: LobbyGame) => {
-      const playerName = useMultiplayerStore.getState().displayName ?? "Player";
+      const playerName = requiredDisplayName(useMultiplayerStore.getState().displayName);
       try {
         await joinDraft({ kind: "new", roomCode: code, displayName: playerName });
         setView("draft-lobby");
