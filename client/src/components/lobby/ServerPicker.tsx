@@ -41,19 +41,22 @@ export function ServerPicker({ onClose, onApply }: ServerPickerProps) {
     }
     setConnTest("testing");
     const ws = new WebSocket(trimmed);
-    const timeout = window.setTimeout(() => {
-      ws.close();
-      setConnTest("fail");
-    }, 3000);
-    ws.onopen = () => {
+    let timeout = 0;
+    // Single exit path for the probe. Detaching the handlers before `close()`
+    // is load-bearing, not tidiness: closing a socket with the server's
+    // unsolicited `ServerHello` still in flight can raise an `error` event,
+    // and a still-attached `onerror` would flip a verified-healthy server
+    // from "ok" to "fail" a beat later.
+    const finish = (result: "ok" | "fail") => {
       window.clearTimeout(timeout);
+      ws.onopen = null;
+      ws.onerror = null;
       ws.close();
-      setConnTest("ok");
+      setConnTest(result);
     };
-    ws.onerror = () => {
-      window.clearTimeout(timeout);
-      setConnTest("fail");
-    };
+    timeout = window.setTimeout(() => finish("fail"), 3000);
+    ws.onopen = () => finish("ok");
+    ws.onerror = () => finish("fail");
   };
 
   // Dismiss on outside-click or Escape — this picker is a preferences dialog,
