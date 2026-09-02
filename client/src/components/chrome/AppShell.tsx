@@ -6,6 +6,7 @@ import { useChangelog } from "../../hooks/useChangelog";
 import { SceneParticles } from "../menu/MenuParticles";
 import { DraftSteps } from "../draft/DraftSteps";
 import { WhatsNewModal } from "../modal/WhatsNewModal";
+import { ConnectionToast } from "../multiplayer/ConnectionToast";
 import { CardDataLoadingBar } from "./CardDataLoadingBar";
 import { ChromeControls } from "./ChromeControls";
 import { Rail } from "./Rail";
@@ -186,6 +187,15 @@ export function AppShell() {
           hideVolume={phoneDraftChrome}
           hideLanguage={phoneDraftChrome}
         />
+
+        {/* The out-of-match toast surface. It lives on the shell, not on a
+            page, because the multiplayer store raises toasts from module-level
+            sockets that outlive whichever page started them: the host-error
+            path fires after `startHosting` has already navigated home, so a
+            page-owned surface renders nothing and every server-side hosting
+            rejection is silent. /game/:id sits outside this shell and mounts
+            its own (with a Retry the shell has no equivalent for). */}
+        <ConnectionToast onSettings={() => setSettingsOpen(true)} />
 
         {whatsNewOpen && (
           <WhatsNewModal

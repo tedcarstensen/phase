@@ -14,7 +14,6 @@ import { JoinErrorDialog } from "../components/lobby/JoinErrorDialog";
 import { LobbyView } from "../components/lobby/LobbyView";
 import { PlayerIdentityBanner } from "../components/lobby/PlayerIdentityBanner";
 import { ServerOfflinePrompt } from "../components/lobby/ServerOfflinePrompt";
-import { ConnectionToast } from "../components/multiplayer/ConnectionToast";
 import { MenuParticles } from "../components/menu/MenuParticles";
 import { MenuPanel, MenuShell } from "../components/menu/MenuShell";
 import { menuButtonClass } from "../components/menu/buttonStyles";
@@ -872,7 +871,6 @@ export function MultiplayerPage() {
 
         </div>
       </MenuShell>
-      <ConnectionToast />
       {serverOfflinePrompt && view === "lobby" && (
         <ServerOfflinePrompt
           serverAddress={serverAddress}
