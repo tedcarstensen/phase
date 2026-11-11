@@ -276,6 +276,13 @@ pub struct RestoredStackAutomationResume {
 
 pub const PUBLIC_SEAT_RESERVATION_MS: u64 = 120_000;
 
+/// Reconnect window for a game with no other human seat.
+///
+/// Ten years — effectively unbounded without risking overflow in
+/// `now + grace`, matching the bound `--single-user` already uses for the
+/// same reason (see the reconnect-window comment in `phase-server`).
+pub const SOLO_RECONNECT_GRACE: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
+
 #[derive(Debug, Clone)]
 pub struct SeatReservation {
     pub token: String,
@@ -525,6 +532,19 @@ impl GameSession {
                 && !self.ai_seats.contains(&PlayerId(i as u8))
                 && !self.reservations.values().any(|r| r.seat_index == i)
         })
+    }
+
+    /// True when a seat other than `player` is held by a human.
+    ///
+    /// AI seats are not waiting on anyone, so a game whose only human seat has
+    /// just dropped has nobody whose seat a grace period would free. This is
+    /// the reasoning `HostingMode::SingleUser` already applies process-wide,
+    /// evaluated per game instead — so a shared server can host solo-vs-AI
+    /// tables without forfeiting them 120 seconds after a phone locks.
+    pub fn has_other_human_seat(&self, player: PlayerId) -> bool {
+        (0..self.player_count as usize)
+            .map(|i| PlayerId(i as u8))
+            .any(|seat| seat != player && !self.ai_seats.contains(&seat))
     }
 
     /// Returns true if all seats are actually occupied by joined humans or AI.
@@ -2111,10 +2131,21 @@ impl SessionManager {
     pub fn handle_disconnect(&mut self, game_code: &str, player: PlayerId) {
         if let Some(session) = self.sessions.get_mut(game_code) {
             session.connected[player.0 as usize] = false;
-            let default_grace = self.reconnect.grace_period;
-            self.reconnect
-                .record_disconnect(game_code, player, default_grace);
-            info!(game = %game_code, player = ?player, "player disconnected");
+            // Only a human opponent is waiting on this seat. With none, the
+            // grace period protects nobody and expiring it just destroys a
+            // game that was still resumable.
+            let grace = if session.has_other_human_seat(player) {
+                self.reconnect.grace_period
+            } else {
+                SOLO_RECONNECT_GRACE
+            };
+            self.reconnect.record_disconnect(game_code, player, grace);
+            info!(
+                game = %game_code,
+                player = ?player,
+                grace_secs = grace.as_secs(),
+                "player disconnected"
+            );
         }
     }
 
@@ -4469,6 +4500,60 @@ mod tests {
             phase_ai::config::create_config_for_players(AiDifficulty::Easy, Platform::Native, 2),
         );
         (mgr, code, token0, ai_seat)
+    }
+
+    #[test]
+    fn only_human_seat_is_not_counted_as_its_own_opponent() {
+        let (mgr, code, _token0, ai_seat) = single_user_game_vs_ai();
+        let session = &mgr.sessions[&code];
+        assert!(session.ai_seats.contains(&ai_seat));
+        assert!(
+            !session.has_other_human_seat(PlayerId(0)),
+            "seat 1 is AI, so seat 0 is the only human"
+        );
+    }
+
+    #[test]
+    fn a_human_opponent_is_counted() {
+        let (mgr, code, _t0, _t1) = setup_two_player_game();
+        let session = &mgr.sessions[&code];
+        assert!(session.has_other_human_seat(PlayerId(0)));
+        assert!(session.has_other_human_seat(PlayerId(1)));
+    }
+
+    // The two below drive the real `handle_disconnect` path with the manager's
+    // default grace set to zero. A seat that takes the default expires on the
+    // next sweep; a seat that takes `SOLO_RECONNECT_GRACE` does not. That
+    // difference is the whole behaviour, so asserting on it beats asserting on
+    // the constant.
+    #[test]
+    fn a_game_with_no_human_opponent_never_expires() {
+        let (mut mgr, code, _token0, _ai_seat) = single_user_game_vs_ai();
+        mgr.reconnect.grace_period = Duration::from_millis(0);
+
+        mgr.handle_disconnect(&code, PlayerId(0));
+        std::thread::sleep(Duration::from_millis(2));
+
+        assert!(
+            mgr.reconnect.check_expired().is_empty(),
+            "a solo game against AI has no opponent waiting on the seat"
+        );
+        assert!(mgr.reconnect.is_disconnected(&code, PlayerId(0)));
+    }
+
+    #[test]
+    fn a_game_with_a_human_opponent_still_expires() {
+        let (mut mgr, code, _t0, _t1) = setup_two_player_game();
+        mgr.reconnect.grace_period = Duration::from_millis(0);
+
+        mgr.handle_disconnect(&code, PlayerId(0));
+        std::thread::sleep(Duration::from_millis(2));
+
+        assert_eq!(
+            mgr.reconnect.check_expired(),
+            vec![code],
+            "a waiting human opponent must still free the seat"
+        );
     }
 
     #[test]
